@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useEditor } from '../context/EditorContext';
 import { stripIds } from '../utils';
+import { Copy, Check } from 'lucide-react';
 
 export const Inspector = () => {
     const { selectedNode, updateNode } = useEditor();
+    const [copied, setCopied] = useState(false);
 
     if (!selectedNode) {
         return (
@@ -22,6 +24,15 @@ export const Inspector = () => {
 
     const handleWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         updateNode({ ...selectedNode, width: parseInt(e.target.value) || 12 });
+    };
+
+    const handleCopyDebug = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const cleanNode = stripIds(selectedNode);
+        navigator.clipboard.writeText(JSON.stringify(cleanNode, null, 2));
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     };
 
     return (
@@ -68,7 +79,7 @@ export const Inspector = () => {
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 ml-1">Additional Properties</h3>
                 <div className="space-y-3">
                     {Object.entries(selectedNode).map(([key, value]) => {
-                        if (['name', 'width', 'type', 'contents', 'tabs', 'rows'].includes(key)) return null;
+                        if (['name', 'width', 'type', 'contents', 'tabs', 'rows', 'id'].includes(key)) return null;
                         return (
                             <div key={key}>
                                 <label className="block text-[10px] font-medium text-slate-500 mb-1 ml-1 uppercase">{key}</label>
@@ -85,12 +96,22 @@ export const Inspector = () => {
             </div>
 
             <div className="pt-6 mt-8 border-t border-slate-100">
-                <details className="group">
-                    <summary className="flex items-center cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors list-none">
-                        <span className="mr-2 transform group-open:rotate-90 transition-transform">▶</span>
-                        Debug JSON
+                <details className="group" open>
+                    <summary className="flex items-center justify-between cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-600 transition-colors list-none select-none">
+                        <div className="flex items-center">
+                            <span className="mr-2 transform group-open:rotate-90 transition-transform">▶</span>
+                            Debug JSON
+                        </div>
+                        <button
+                            onClick={handleCopyDebug}
+                            className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-medium text-slate-500 bg-white border border-slate-100 rounded hover:bg-slate-50 hover:text-slate-700 transition-colors shadow-sm"
+                            title="Copy JSON"
+                        >
+                            {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                            {copied ? 'Copied' : 'Copy'}
+                        </button>
                     </summary>
-                    <div className="mt-2 p-3 bg-slate-900 rounded-lg overflow-hidden">
+                    <div className="mt-3 p-3 bg-slate-900 rounded-lg overflow-hidden relative group/code">
                         <pre className="text-[10px] text-slate-300 font-mono overflow-auto max-h-40 custom-scrollbar">
                             {JSON.stringify(stripIds(selectedNode), null, 2)}
                         </pre>
