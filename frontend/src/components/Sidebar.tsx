@@ -1,15 +1,14 @@
 import React, { useState } from 'react';
 import { useEditor } from '../context/EditorContext';
 import { type BaseNode, type FormNode, hasRows } from '../types';
-import { ChevronRight, Folder, FileText, Layers, Hash, Layout, Copy } from 'lucide-react';
+import { ChevronRight, Folder, FileText, Layers, Hash, Layout } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ExcelImporter } from './ExcelImporter';
 import { ContextMenu } from './ContextMenu';
-import { motion, AnimatePresence } from 'framer-motion';
 
 import {
     DndContext,
-    closestCenter,
+    pointerWithin,
     KeyboardSensor,
     PointerSensor,
     useSensor,
@@ -46,7 +45,7 @@ const SortableTreeItem = ({ node, level = 0, onContextMenu }: { node: BaseNode, 
         transform,
         transition,
         isDragging
-    } = useSortable({ id: node.id || 'unknown-id', disabled: level === 0 }); // Disable dragging for root
+    } = useSortable({ id: node.id || 'unknown-id', disabled: level === 0 });
 
     const style = {
         transform: CSS.Transform.toString(transform),
@@ -54,20 +53,15 @@ const SortableTreeItem = ({ node, level = 0, onContextMenu }: { node: BaseNode, 
         opacity: isDragging ? 0.5 : 1,
     };
 
-    // Helper to get children based on node type
-    const getChildren = (n: BaseNode): BaseNode[] => {
-        if (n.type === 'FORM') {
-            return (n as FormNode).tabs || [];
-        }
-        if (hasRows(n)) {
-            const rows = n.contents?.rows || [];
-            return rows.flatMap(row => row.contents);
-        }
+    // Helper to get children for SortableContext ID list
+    const getAllChildrenIds = (n: BaseNode): string[] => {
+        if (n.type === 'FORM') return (n as FormNode).tabs?.map(t => t.id!) || [];
+        if (hasRows(n)) return n.contents?.rows?.flatMap(r => r.contents.map(c => c.id!)) || [];
         return [];
     };
 
-    const children = getChildren(node);
-    const hasChildren = children.length > 0;
+    const allChildIds = getAllChildrenIds(node);
+    const hasChildren = allChildIds.length > 0;
     const isSelected = selectedNode === node || (node.id && selectedNode?.id === node.id);
 
     const handleToggle = (e: React.MouseEvent) => {
@@ -112,53 +106,82 @@ const SortableTreeItem = ({ node, level = 0, onContextMenu }: { node: BaseNode, 
                     onClick={hasChildren ? handleToggle : undefined}
                     onPointerDown={(e) => e.stopPropagation()} // Prevent drag when clicking toggle
                 >
-                    <motion.div
-                        initial={false}
-                        animate={{ rotate: isExpanded ? 90 : 0 }}
-                        transition={{ duration: 0.15 }}
-                    >
+                    <div style={{ transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
                         <ChevronRight className="w-3.5 h-3.5" />
-                    </motion.div>
+                    </div>
                 </div>
 
                 <NodeIcon type={node.type} />
                 <span className="truncate ml-1.5">{node.name || <span className="italic opacity-40 font-normal">Unnamed</span>}</span>
             </div>
 
-            <AnimatePresence initial={false}>
-                {hasChildren && isExpanded && (
-                    <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.2, ease: "easeInOut" }}
-                        className="overflow-hidden"
-                    >
-                        <div className="flex flex-col relative">
-                            {/* Vertical Guide Line */}
-                            <div
-                                className="absolute left-0 top-0 bottom-0 w-px bg-slate-200"
-                                style={{ left: `${level * 12 + 19}px` }}
-                            />
+            {hasChildren && isExpanded && (
+                <div className="overflow-hidden">
+                    <div className="flex flex-col relative">
+                        {/* Vertical Guide Line */}
+                        <div
+                            className="absolute left-0 top-0 bottom-0 w-px bg-slate-200"
+                            style={{ left: `${level * 12 + 19}px` }}
+                        />
 
-                            <SortableContext
-                                items={children.map(c => c.id || 'unknown')}
-                                strategy={verticalListSortingStrategy}
-                            >
-                                {children.map((child, i) => (
-                                    <SortableTreeItem key={child.id || `${child.type}-${i}`} node={child} level={level + 1} onContextMenu={onContextMenu} />
-                                ))}
-                            </SortableContext>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+                        <SortableContext
+                            items={allChildIds}
+                            strategy={verticalListSortingStrategy}
+                        >
+                            {/* Special rendering for Sections to show Rows */}
+                            {node.type === 'SECTION' && node.contents?.rows ? (
+                                <div className="flex flex-col gap-1 mt-1">
+                                    {node.contents.rows.map((row, rIndex) => (
+                                        <div
+                                            key={rIndex}
+                                            className={clsx(
+                                                "relative",
+                                                // If multiple items, show visual group. Even for 1 item, showing 'row' grouping helps consistency if desired, 
+                                                // but let's stick to user request: "clear that a field is in a different row or same row"
+                                            )}
+                                        >
+                                            {/* Visual Row Container */}
+                                            <div className={clsx(
+                                                "flex flex-col",
+                                                row.contents.length > 1
+                                                    ? "bg-slate-50 border border-slate-200 rounded-md mx-2 py-1 mb-1 shadow-sm"
+                                                    : ""
+                                            )}>
+                                                {row.contents.length > 1 && (
+                                                    <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider px-2 mb-0.5">Row Group</div>
+                                                )}
+                                                {row.contents.map((child, i) => (
+                                                    <SortableTreeItem
+                                                        key={child.id || `${child.type}-${i}`}
+                                                        node={child}
+                                                        level={level + 1}
+                                                        onContextMenu={onContextMenu}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                // Default rendering for Forms and other Containers (Tabs)
+                                node.type === 'FORM'
+                                    ? (node as FormNode).tabs?.map((child, i) => (
+                                        <SortableTreeItem key={child.id || `${child.type}-${i}`} node={child} level={level + 1} onContextMenu={onContextMenu} />
+                                    ))
+                                    : (node.contents?.rows?.flatMap(r => r.contents)?.map((child, i) => (
+                                        <SortableTreeItem key={child.id || `${child.type}-${i}`} node={child} level={level + 1} onContextMenu={onContextMenu} />
+                                    )))
+                            )}
+                        </SortableContext>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
 export const Sidebar = () => {
-    const { data, addNode, deleteNode, moveNode } = useEditor();
+    const { data, addNode, deleteNode, moveNode, mergeFieldWithPrevious, splitFieldToNewRow } = useEditor();
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node: BaseNode } | null>(null);
 
     const sensors = useSensors(
@@ -178,25 +201,6 @@ export const Sidebar = () => {
         if (over && active.id !== over.id) {
             moveNode(active.id as string, over.id as string);
         }
-    };
-
-    const handleExport = () => {
-        const jsonString = JSON.stringify(data, null, 2);
-        const blob = new Blob([jsonString], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${data.name || 'form_layout'}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    };
-
-    const handleCopy = () => {
-        const jsonString = JSON.stringify(data, null, 2);
-        navigator.clipboard.writeText(jsonString);
-        alert('JSON copied to clipboard!');
     };
 
 
@@ -225,36 +229,42 @@ export const Sidebar = () => {
         }
     };
 
+    const handleMerge = () => {
+        if (contextMenu) {
+            mergeFieldWithPrevious(contextMenu.node.id!);
+            setContextMenu(null);
+        }
+    };
+
+    const handleSplit = () => {
+        if (contextMenu) {
+            splitFieldToNewRow(contextMenu.node.id!);
+            setContextMenu(null);
+        }
+    };
+
     return (
         <div className="flex flex-col h-full">
             <div className="flex items-center justify-between p-2 mb-2 border-b border-slate-100 bg-slate-50/50">
                 <ExcelImporter />
-                <div className="flex gap-1">
-                    <button
-                        onClick={handleCopy}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded shadow-sm transition-colors"
-                        title="Copy JSON to Clipboard"
-                    >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span className="hidden xl:inline">Copy</span>
-                    </button>
-                    <button
-                        onClick={handleExport}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium rounded shadow-sm transition-colors"
-                        title="Export to JSON File"
-                    >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span className="hidden xl:inline">Export</span>
-                    </button>
-                </div>
+                {/* Redundant buttons removed to clean UI, sticking to App.tsx header */}
             </div>
-            <div className="flex-1 overflow-auto pb-10">
+            <div className="flex-1 overflow-auto custom-scrollbar p-2">
                 <DndContext
                     sensors={sensors}
-                    collisionDetection={closestCenter}
+                    collisionDetection={pointerWithin}
                     onDragEnd={handleDragEnd}
                 >
-                    <SortableTreeItem node={data} onContextMenu={handleContextMenu} />
+                    <SortableContext
+                        items={data.type === 'FORM' ? (data as any).tabs?.map((t: any) => t.id) || [] : []}
+                        strategy={verticalListSortingStrategy}
+                    >
+                        <SortableTreeItem
+                            node={data}
+                            onContextMenu={handleContextMenu}
+                            level={0}
+                        />
+                    </SortableContext>
                 </DndContext>
             </div>
 
@@ -266,6 +276,8 @@ export const Sidebar = () => {
                     onClose={handleCloseContextMenu}
                     onAdd={handleAddStart}
                     onDelete={handleDeleteStart}
+                    onMergeWithPrevious={handleMerge}
+                    onSplitToOwnRow={handleSplit}
                 />
             )}
         </div>

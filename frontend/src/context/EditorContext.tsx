@@ -17,6 +17,8 @@ interface EditorContextType {
     addNode: (parentNode: BaseNode, type: string) => void;
     deleteNode: (node: BaseNode) => void;
     moveNode: (activeId: string, overId: string) => void;
+    mergeFieldWithPrevious: (id: string) => void;
+    splitFieldToNewRow: (id: string) => void;
 }
 
 const EditorContext = createContext<EditorContextType | undefined>(undefined);
@@ -45,10 +47,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         setDataRaw(ensureIds(newData) as FormNode);
     };
 
-    // Deep update function (placeholder for now, will implement robust tree traversal later)
-    // For now, we might just be updating the selected node in place if we passed by reference,
-    // but React needs state updates.
-    // We'll implementation a proper immutable update logic later.
     const updateNode = (updatedNode: BaseNode) => {
         if (updatedNode.type === 'FORM') {
             setData(updatedNode as FormNode);
@@ -56,16 +54,10 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
             return;
         }
 
-        // Recursive helper to find and replace node
         const replaceNode = (current: BaseNode, target: BaseNode): BaseNode => {
             if (current.id === target.id) {
                 return target;
             }
-
-            // Clone current to avoid mutation if we are going deep
-            // But strict immutability requires full cloning path.
-            // For now, we will clone the path.
-
             if (current.type === 'FORM') {
                 const form = current as FormNode;
                 if (form.tabs) {
@@ -75,7 +67,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                     };
                 }
             }
-
             if (current.contents && current.contents.rows) {
                 return {
                     ...current,
@@ -88,7 +79,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                     }
                 };
             }
-
             return current;
         };
 
@@ -98,7 +88,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     };
 
     const addNode = (parentNode: BaseNode, type: string) => {
-        // 1. Create new node
         let newNode: BaseNode = {
             id: generateId(),
             name: `New ${type}`,
@@ -113,7 +102,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
             (newNode as any).contents = { width: 12, cellWidth: 1, rows: [] };
         }
 
-        // 2. Add to parent
         if (parentNode.type === 'FORM') {
             const form = parentNode as FormNode;
             if (!form.tabs) form.tabs = [];
@@ -121,17 +109,9 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                 form.tabs.push(newNode as TabNode);
             }
         } else if (parentNode.type === 'TAB' || parentNode.type === 'SECTION') {
-            // Add to rows
             if (!parentNode.contents) parentNode.contents = { width: 12, cellWidth: 1, rows: [] };
             if (!parentNode.contents.rows) parentNode.contents.rows = [];
-
-            // Add to last row if space exists, or new row
             const rows = parentNode.contents.rows;
-            // const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
-
-            // Simple logic: Always add to new row for section/tab children to ensure visibility,
-            // unless it's a field, where we might want to pack them.
-            // For now, let's just append a new row with this item.
             rows.push({ contents: [newNode] });
         }
 
@@ -139,7 +119,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     };
 
     const deleteNode = (nodeToDelete: BaseNode) => {
-        // Recursive delete helper
         const deleteFromNode = (current: BaseNode): boolean => {
             if (current.type === 'FORM') {
                 const form = current as FormNode;
@@ -152,21 +131,18 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                     return form.tabs.some((t: TabNode) => deleteFromNode(t));
                 }
             }
-
-            if (current.contents && current.contents.rows) {
-                for (let i = 0; i < current.contents.rows.length; i++) {
-                    const row = current.contents.rows[i];
-                    const idx = row.contents.findIndex((n: BaseNode) => n === nodeToDelete || n.id === nodeToDelete.id);
+            if (current.contents?.rows) {
+                for (let r = 0; r < current.contents.rows.length; r++) {
+                    const row = current.contents.rows[r];
+                    const idx = row.contents.findIndex(n => n.id === nodeToDelete.id);
                     if (idx !== -1) {
                         row.contents.splice(idx, 1);
-                        // Remove empty row
                         if (row.contents.length === 0) {
-                            current.contents.rows.splice(i, 1);
+                            current.contents.rows.splice(r, 1);
                         }
                         return true;
                     }
-                    // Recurse
-                    if (row.contents.some((n: BaseNode) => deleteFromNode(n))) return true;
+                    if (row.contents.some(c => deleteFromNode(c))) return true;
                 }
             }
             return false;
@@ -179,12 +155,11 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     };
 
     const moveNode = (activeId: string, overId: string) => {
-
         type NodeLocation = {
             parent: BaseNode;
             containerType: 'tabs' | 'rows';
-            index: number; // Index in tabs array OR Index of Row
-            subIndex?: number; // Index inside the row (for 'rows' type)
+            index: number;
+            subIndex?: number;
         };
 
         const findLocation = (root: BaseNode, id: string): NodeLocation | null => {
@@ -193,7 +168,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                 if (form.tabs) {
                     const tabIdx = form.tabs.findIndex(t => t.id === id);
                     if (tabIdx !== -1) return { parent: form, containerType: 'tabs', index: tabIdx };
-
                     for (const tab of form.tabs) {
                         const res = findLocation(tab, id);
                         if (res) return res;
@@ -207,7 +181,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
                     if (cIdx !== -1) {
                         return { parent: root, containerType: 'rows', index: r, subIndex: cIdx };
                     }
-                    // Recurse
                     for (const item of row.contents) {
                         const res = findLocation(item, id);
                         if (res) return res;
@@ -219,18 +192,14 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
 
         const cleanEmptyRows = (node: BaseNode): BaseNode => {
             if (node.contents && node.contents.rows) {
-                // First recurse down
                 node.contents.rows.forEach(row => {
                     row.contents = row.contents.map(c => cleanEmptyRows(c));
                 });
-
-                // Then filter current rows
                 const hasEmptyRows = node.contents.rows.some(r => r.contents.length === 0);
                 if (hasEmptyRows) {
                     node.contents.rows = node.contents.rows.filter(r => r.contents.length > 0);
                 }
             }
-
             if (node.type === 'FORM') {
                 const form = node as FormNode;
                 if (form.tabs) {
@@ -253,7 +222,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
             ? (overLoc.parent as FormNode).tabs![overLoc.index]
             : overLoc.parent.contents!.rows![overLoc.index].contents[overLoc.subIndex!];
 
-        // LOGIC 1: Drop INTO Container
         const isContainer = overNode.type === 'TAB' || overNode.type === 'SECTION';
         const isValidChild = (parent: string, child: string) => {
             if (parent === 'TAB' && child === 'SECTION') return true;
@@ -262,14 +230,12 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         };
 
         if (isContainer && activeNode.type !== overNode.type && isValidChild(overNode.type, activeNode.type)) {
-            // Remove active
             if (activeLoc.containerType === 'tabs') {
                 (activeLoc.parent as FormNode).tabs!.splice(activeLoc.index, 1);
             } else {
                 activeLoc.parent.contents!.rows![activeLoc.index].contents.splice(activeLoc.subIndex!, 1);
             }
 
-            // Add to container
             if (!overNode.contents) overNode.contents = { width: 12, cellWidth: 1, rows: [] };
             if (!overNode.contents.rows) overNode.contents.rows = [];
             overNode.contents.rows.push({ contents: [activeNode] });
@@ -279,9 +245,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
             return;
         }
 
-        // LOGIC 2: Reorder
-
-        // Case A: Reordering Tabs
         if (activeLoc.containerType === 'tabs' && overLoc.containerType === 'tabs' && activeLoc.parent === overLoc.parent) {
             const tabs = (activeLoc.parent as FormNode).tabs!;
             const [moved] = tabs.splice(activeLoc.index, 1);
@@ -290,31 +253,18 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
             return;
         }
 
-        // Case B: Reordering Row Items (Fields/Sections)
         if (activeLoc.containerType === 'rows' && overLoc.containerType === 'rows') {
-            // Remove active from its original row
             const activeRow = activeLoc.parent.contents!.rows![activeLoc.index];
             const [movedNode] = activeRow.contents.splice(activeLoc.subIndex!, 1);
 
-            // Determine target insertion
             const targetParent = overLoc.parent;
             const targetRows = targetParent.contents!.rows!;
             let targetRowIndex = overLoc.index;
-
-            // If we drag down in same parent, we generally want to insert AFTER the target row 
-            // to visually displace it upwards.
-            // But since we are creating a NEW row, "Insert Before" forces target down.
-            // "Insert After" forces target up.
-
-            // Standard reorder behavior:
-            // If dragging item A to item B.
-            // If B is below A: Insert B's row + 1?
 
             if (activeLoc.parent === overLoc.parent && activeLoc.index < overLoc.index) {
                 targetRowIndex += 1;
             }
 
-            // Insert new row
             targetRows.splice(targetRowIndex, 0, { contents: [movedNode] });
 
             cleanEmptyRows(data);
@@ -323,9 +273,70 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         }
     };
 
-    // WAITING: I need to add IDs to the `BaseNode` interface and `INITIAL_DATA` first to make this robust.
+    const mergeFieldWithPrevious = (id: string) => {
+        const findAndMerge = (node: BaseNode): boolean => {
+            if (node.contents?.rows) {
+                for (let r = 0; r < node.contents.rows.length; r++) {
+                    const row = node.contents.rows[r];
+                    const itemIdx = row.contents.findIndex(c => c.id === id);
+                    if (itemIdx !== -1) {
+                        if (r > 0) {
+                            const prevRow = node.contents.rows[r - 1];
+                            const item = row.contents[itemIdx];
+                            row.contents.splice(itemIdx, 1);
+                            prevRow.contents.push(item);
+                            if (row.contents.length === 0) {
+                                node.contents.rows.splice(r, 1);
+                            }
+                            setData({ ...data });
+                            return true;
+                        }
+                        return true;
+                    }
+                    if (row.contents.some(c => findAndMerge(c))) return true;
+                }
+            }
+            if (node.type === 'FORM') {
+                return (node as FormNode).tabs?.some(t => findAndMerge(t)) ?? false;
+            }
+            return false;
+        };
+        findAndMerge(data);
+    };
+
+    const splitFieldToNewRow = (id: string) => {
+        const findAndSplit = (node: BaseNode): boolean => {
+            if (node.contents?.rows) {
+                for (let r = 0; r < node.contents.rows.length; r++) {
+                    const row = node.contents.rows[r];
+                    const itemIdx = row.contents.findIndex(c => c.id === id);
+                    if (itemIdx !== -1) {
+                        if (row.contents.length > 1) {
+                            const item = row.contents[itemIdx];
+                            row.contents.splice(itemIdx, 1);
+                            const newRow: import('../types').RowNode = { contents: [item] };
+                            node.contents.rows.splice(r + 1, 0, newRow);
+                            setData({ ...data });
+                        }
+                        return true;
+                    }
+                    if (row.contents.some(c => findAndSplit(c))) return true;
+                }
+            }
+            if (node.type === 'FORM') {
+                return (node as FormNode).tabs?.some(t => findAndSplit(t)) ?? false;
+            }
+            return false;
+        };
+        findAndSplit(data);
+    };
+
     return (
-        <EditorContext.Provider value={{ data, setData, selectedNode, selectNode: setSelectedNode, updateNode, addNode, deleteNode, moveNode }}>
+        <EditorContext.Provider value={{
+            data, setData, selectedNode, selectNode: setSelectedNode,
+            updateNode, addNode, deleteNode, moveNode,
+            mergeFieldWithPrevious, splitFieldToNewRow
+        }}>
             {children}
         </EditorContext.Provider>
     );
