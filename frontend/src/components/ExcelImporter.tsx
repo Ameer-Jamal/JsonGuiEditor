@@ -71,8 +71,11 @@ export const ExcelImporter = () => {
         // 1. Group by Tab -> Section
         excelData.forEach(row => {
             // Use the mapped column names to get values
-            const tabName = row[mapping.tabName] || 'Default Tab';
-            const sectionName = row[mapping.sectionName] || 'Default Section';
+            const rawTab = row[mapping.tabName];
+            const rawSection = row[mapping.sectionName];
+
+            const tabName = rawTab ? String(rawTab).trim() : 'Default Tab';
+            const sectionName = rawSection ? String(rawSection).trim() : 'Default Section';
 
             if (!tabsMap.has(tabName)) {
                 tabsMap.set(tabName, new Map());
@@ -159,8 +162,39 @@ export const ExcelImporter = () => {
         setIsModalOpen(false);
     };
 
+    // Calculate preview stats to warn user of potential mapping issues
+    const previewStats = React.useMemo(() => {
+        if (!excelData.length || !mapping.tabName || !mapping.name) return null;
+
+        const tabs = new Set<string>();
+        const sections = new Set<string>(); // "Tab::Section" unique keys
+        let fieldCount = 0;
+
+        excelData.forEach(row => {
+            const rawTab = row[mapping.tabName];
+            const rawSection = row[mapping.sectionName];
+
+            // Name is required for a valid field
+            if (!row[mapping.name]) return;
+
+            const tabName = rawTab ? String(rawTab).trim() : 'Default Tab';
+            const sectionName = rawSection ? String(rawSection).trim() : 'Default Section';
+
+            tabs.add(tabName);
+            sections.add(`${tabName}::${sectionName}`);
+            fieldCount++;
+        });
+
+        return {
+            tabs: tabs.size,
+            sections: sections.size,
+            fields: fieldCount
+        };
+    }, [excelData, mapping]);
+
     return (
         <div>
+            {/* ... (Hidden input and Upload button remain same) ... */}
             <input
                 type="file"
                 ref={fileInputRef}
@@ -243,21 +277,32 @@ export const ExcelImporter = () => {
                             </div>
                         </div>
 
-                        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-3">
-                            <button
-                                onClick={() => setIsModalOpen(false)}
-                                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleImport}
-                                disabled={!mapping.tabName || !mapping.name}
-                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                Import Layout
-                                <ArrowRight className="w-4 h-4" />
-                            </button>
+                        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-3">
+                            <div className="text-xs text-slate-500">
+                                {previewStats ? (
+                                    <span className={previewStats.sections > previewStats.fields / 2 ? "text-orange-600 font-medium" : "text-slate-600"}>
+                                        Preview: {previewStats.tabs} Tabs, {previewStats.sections} Sections, {previewStats.fields} Fields
+                                    </span>
+                                ) : (
+                                    <span>Configure mapping to see preview</span>
+                                )}
+                            </div>
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setIsModalOpen(false)}
+                                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleImport}
+                                    disabled={!mapping.tabName || !mapping.name}
+                                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Import Layout
+                                    <ArrowRight className="w-4 h-4" />
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
