@@ -4,6 +4,7 @@ import { type BaseNode, type FormNode, hasRows } from '../types';
 import { ChevronRight, Folder, FileText, Layers, Hash, Layout } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ExcelImporter } from './ExcelImporter';
+import { JsonImporter } from './JsonImporter';
 import { ContextMenu } from './ContextMenu';
 
 import {
@@ -246,7 +247,10 @@ export const Sidebar = () => {
     return (
         <div className="flex flex-col h-full">
             <div className="flex items-center justify-between p-2 mb-2 border-b border-slate-100 bg-slate-50/50">
-                <ExcelImporter />
+                <div className="flex items-center gap-2">
+                    <ExcelImporter />
+                    <JsonImporter />
+                </div>
                 {/* Redundant buttons removed to clean UI, sticking to App.tsx header */}
             </div>
             <div className="flex-1 overflow-auto custom-scrollbar p-2">
