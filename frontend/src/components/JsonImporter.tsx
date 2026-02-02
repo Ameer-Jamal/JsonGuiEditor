@@ -1,121 +1,45 @@
 import React, { useRef, useState } from 'react';
 import { Upload } from 'lucide-react';
 import { useEditor } from '../context/EditorContext';
-import { type BaseNode, type FormNode, type NodeType, type TabNode } from '../types';
+import { useToast } from './ToastProvider';
 
-const ALLOWED_NODE_TYPES: NodeType[] = ['FORM', 'TAB', 'SECTION', 'FIELD', 'SUBFORM'];
-
-type ImportStatus =
-    | { type: 'idle' }
-    | { type: 'error'; message: string }
-    | { type: 'success'; formName: string };
-
-const isObject = (value: unknown): value is Record<string, unknown> => {
-    return typeof value === 'object' && value !== null;
-};
-
-const normalizeNode = (node: unknown, fallbackName: string): BaseNode => {
-    if (!isObject(node)) {
-        throw new Error('Node entries must be objects.');
-    }
-
-    const nodeRecord = node as Record<string, unknown>;
-    const resolvedType: NodeType =
-        typeof nodeRecord.type === 'string' && ALLOWED_NODE_TYPES.includes(nodeRecord.type as NodeType)
-            ? nodeRecord.type as NodeType
-            : 'FIELD';
-
-    const baseNode: BaseNode = {
-        ...nodeRecord,
-        name: typeof nodeRecord.name === 'string' && nodeRecord.name.trim().length > 0
-            ? nodeRecord.name
-            : fallbackName,
-        type: resolvedType,
-        width: typeof nodeRecord.width === 'number' ? nodeRecord.width : undefined,
-        offset: typeof nodeRecord.offset === 'number' ? nodeRecord.offset : undefined,
-    };
-
-    if (nodeRecord.contents && isObject(nodeRecord.contents) && Array.isArray(nodeRecord.contents.rows)) {
-        const rows = nodeRecord.contents.rows as Array<Record<string, unknown>>;
-        baseNode.contents = {
-            ...nodeRecord.contents,
-            rows: rows.map((row, rowIndex) => {
-                if (!isObject(row) || !Array.isArray(row.contents)) {
-                    throw new Error(`Row ${rowIndex + 1} is missing a contents array.`);
-                }
-                const rowRecord = row as Record<string, unknown> & { contents: unknown[] };
-                return {
-                    ...rowRecord,
-                    contents: rowRecord.contents.map((child, childIndex) =>
-                        normalizeNode(child, `Unnamed Node ${rowIndex + 1}.${childIndex + 1}`)
-                    )
-                };
-            })
-        };
-    }
-
-    return baseNode;
-};
-
-const parseForm = (raw: unknown): FormNode => {
-    if (!isObject(raw)) {
-        throw new Error('File does not contain a JSON object.');
-    }
-    if (raw.type !== 'FORM') {
-        throw new Error('Root object must have type "FORM".');
-    }
-
-    const rawRecord = raw as Record<string, unknown>;
-    const form: FormNode = {
-        ...(raw as FormNode),
-        name: typeof rawRecord.name === 'string' && rawRecord.name.trim().length > 0
-            ? rawRecord.name
-            : 'IMPORTED_FORM',
-        type: 'FORM',
-    };
-
-    const tabs = Array.isArray(form.tabs) ? form.tabs : [];
-    form.tabs = tabs.map(
-        (tab, index) => normalizeNode(tab, `Imported Tab ${index + 1}`) as TabNode
-    );
-
-    return form;
-};
 
 export const JsonImporter = () => {
-    const { setData } = useEditor();
+    const { setFromJson } = useEditor();
+    const { addToast } = useToast();
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const [status, setStatus] = useState<ImportStatus>({ type: 'idle' });
+    const [isPasteOpen, setIsPasteOpen] = useState(false);
+    const [pasteText, setPasteText] = useState('');
 
-    const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const text = e.target?.result;
-                if (typeof text !== 'string') {
-                    throw new Error('Unable to read file contents.');
-                }
-
-                const parsed = JSON.parse(text);
-                const form = parseForm(parsed);
-                setData(form);
-                setStatus({ type: 'success', formName: form.name });
-            } catch (err) {
-                console.error('Failed to import JSON layout:', err);
-                setStatus({
-                    type: 'error',
-                    message: err instanceof Error ? err.message : 'Unknown error while reading JSON file.'
-                });
+        try {
+            const text = await file.text();
+            if (typeof text !== 'string') {
+                throw new TypeError('Unable to read file contents.');
             }
-        };
-        reader.onerror = () => {
-            setStatus({ type: 'error', message: 'Failed to read the selected file.' });
-        };
-        reader.readAsText(file);
+            const parsed = JSON.parse(text);
+            setFromJson(parsed);
+            addToast('JSON import complete', 'success');
+        } catch (err) {
+            console.error('Failed to import JSON layout:', err);
+            addToast('JSON import failed', 'error');
+        }
         event.target.value = '';
+    };
+
+    const handlePasteImport = () => {
+        try {
+            const parsed = JSON.parse(pasteText);
+            setFromJson(parsed);
+            addToast('JSON import complete', 'success');
+            setIsPasteOpen(false);
+            setPasteText('');
+        } catch (err) {
+            console.error('Failed to import pasted JSON:', err);
+            addToast('JSON import failed', 'error');
+        }
     };
 
     return (
@@ -127,22 +51,61 @@ export const JsonImporter = () => {
                 accept=".json,application/json"
                 className="hidden"
             />
-            <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded shadow-sm transition-colors"
-            >
-                <Upload className="w-3.5 h-3.5" />
-                Import JSON
-            </button>
-            {status.type === 'error' && (
-                <span className="text-[11px] text-red-600">
-                    {status.message}
-                </span>
-            )}
-            {status.type === 'success' && (
-                <span className="text-[11px] text-emerald-600">
-                    Imported {status.formName}
-                </span>
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded shadow-sm transition-colors"
+                >
+                    <Upload className="w-3.5 h-3.5" />
+                    Import JSON
+                </button>
+                <button
+                    onClick={() => setIsPasteOpen(true)}
+                    className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded shadow-sm hover:bg-slate-50 transition-colors"
+                >
+                    Paste JSON
+                </button>
+            </div>
+
+            {isPasteOpen && (
+                <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl shadow-2xl w-[600px] max-w-[92vw] overflow-hidden">
+                        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-semibold text-slate-800">Paste JSON</h3>
+                                <p className="text-[11px] text-slate-400">Paste raw JSON and import</p>
+                            </div>
+                            <button
+                                onClick={() => setIsPasteOpen(false)}
+                                className="text-slate-400 hover:text-slate-600"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <textarea
+                                value={pasteText}
+                                onChange={(e) => setPasteText(e.target.value)}
+                                className="w-full min-h-[220px] input-field font-mono text-[12px]"
+                                placeholder='{"example": true}'
+                            />
+                            <div className="flex justify-end gap-2">
+                                <button
+                                    onClick={() => setIsPasteOpen(false)}
+                                    className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handlePasteImport}
+                                    className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800"
+                                >
+                                    Import
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

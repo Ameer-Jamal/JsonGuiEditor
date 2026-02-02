@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { EditorProvider, useEditor } from './context/EditorContext';
+import { ToastProvider } from './components/ToastProvider';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { Preview } from './components/Preview';
 import { Download, Copy, Check } from 'lucide-react';
-import { stripIds } from './utils';
+import { jsonTreeToValue } from './schema';
 
 function Layout() {
-  const { data } = useEditor();
+  const { valueTree } = useEditor();
   const [copied, setCopied] = useState(false);
   const [leftWidth, setLeftWidth] = useState(320);
   const [rightWidth, setRightWidth] = useState(320);
@@ -18,13 +19,27 @@ function Layout() {
   const startResizingLeft = useCallback(() => setIsResizingLeft(true), []);
   const startResizingRight = useCallback(() => setIsResizingRight(true), []);
 
+  const handleLeftResizeKey = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const delta = e.key === 'ArrowLeft' ? -20 : 20;
+    setLeftWidth((prev) => Math.max(200, Math.min(600, prev + delta)));
+  };
+
+  const handleRightResizeKey = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const delta = e.key === 'ArrowLeft' ? 20 : -20;
+    setRightWidth((prev) => Math.max(200, Math.min(600, prev + delta)));
+  };
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (isResizingLeft) {
         setLeftWidth(Math.max(200, Math.min(600, e.clientX)));
       }
       if (isResizingRight) {
-        setRightWidth(Math.max(200, Math.min(600, window.innerWidth - e.clientX)));
+        setRightWidth(Math.max(200, Math.min(600, globalThis.innerWidth - e.clientX)));
       }
     };
 
@@ -34,8 +49,8 @@ function Layout() {
     };
 
     if (isResizingLeft || isResizingRight) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      globalThis.addEventListener('mousemove', handleMouseMove);
+      globalThis.addEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none'; // Prevent text selection
     } else {
@@ -44,8 +59,8 @@ function Layout() {
     }
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      globalThis.removeEventListener('mousemove', handleMouseMove);
+      globalThis.removeEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
@@ -55,23 +70,23 @@ function Layout() {
 
 
   const handleCopyJson = () => {
-    const cleanData = stripIds(data);
+    const cleanData = jsonTreeToValue(valueTree);
     navigator.clipboard.writeText(JSON.stringify(cleanData, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleExportFile = () => {
-    const cleanData = stripIds(data);
+    const cleanData = jsonTreeToValue(valueTree);
     const jsonString = JSON.stringify(cleanData, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${data.name || 'form_layout'}.json`;
+    link.download = 'json_data.json';
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    link.remove();
     URL.revokeObjectURL(url);
   };
 
@@ -98,9 +113,12 @@ function Layout() {
         </div>
 
         {/* Resizer Handle */}
-        <div
+        <button
+          type="button"
+          aria-label="Resize left panel"
           className="absolute top-0 right-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[50%] bg-transparent"
           onMouseDown={startResizingLeft}
+          onKeyDown={handleLeftResizeKey}
         />
       </div>
 
@@ -150,9 +168,12 @@ function Layout() {
         style={{ width: rightWidth, minWidth: rightWidth }}
       >
         {/* Resizer Handle (Left Side of Right Sidebar) */}
-        <div
+        <button
+          type="button"
+          aria-label="Resize right panel"
           className="absolute top-0 left-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[-50%] bg-transparent"
           onMouseDown={startResizingRight}
+          onKeyDown={handleRightResizeKey}
         />
 
         <div className="h-16 flex items-center px-6 border-b border-slate-100 bg-white">
@@ -168,9 +189,11 @@ function Layout() {
 
 function App() {
   return (
-    <EditorProvider>
-      <Layout />
-    </EditorProvider>
+    <ToastProvider>
+      <EditorProvider>
+        <Layout />
+      </EditorProvider>
+    </ToastProvider>
   );
 }
 

@@ -1,45 +1,45 @@
 
-export type NodeType = 'FORM' | 'TAB' | 'SECTION' | 'FIELD' | 'SUBFORM';
+export type SchemaType = 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' | 'any';
 
-export interface BaseNode {
+export interface SchemaNode {
+    id: string;
+    type: SchemaType;
+    title?: string;
+    enum?: Array<string | number | boolean | null>;
+    properties?: Record<string, SchemaNode>;
+    propertyOrder?: string[];
+    required?: string[];
+    items?: SchemaNode;
+}
+
+export interface JsonNode {
+    id: string;
+    type: SchemaType;
+    key?: string;
+    value?: string | number | boolean | null;
+    children?: JsonNode[];
+}
+
+export type PathSegment =
+    | { kind: 'object'; key: string }
+    | { kind: 'array'; index: number };
+
+export interface MappingLevel {
+    id: string;
     name: string;
-    type: NodeType;
-    width?: number; // 1-12 usually
-    offset?: number;
-    id?: string; // Internal ID for drag and drop
-    contents?: NodeContainer;
-    // Generic key-value for other props
-    [key: string]: any;
+    path: string;
+    overridePaths?: string[];
+    labelKey?: string;
+    filterKey?: string;
+    filterValues?: string[];
 }
 
-export interface NodeContainer {
-    width?: number;
-    cellWidth?: number;
-    rows?: RowNode[];
-}
-
-export interface RowNode {
-    contents: BaseNode[];
-}
-
-export interface FormNode extends BaseNode {
-    type: 'FORM';
-    tabs?: TabNode[];
-}
-
-export interface TabNode extends BaseNode {
-    type: 'TAB';
-}
-
-export interface SectionNode extends BaseNode {
-    type: 'SECTION';
-}
-
-export interface FieldNode extends BaseNode {
-    type: 'FIELD';
-}
-
-// Helper to check for container vs tab structure (since Tabs array acts like rows in the root)
-export function hasRows(node: BaseNode): boolean {
-    return !!node.contents?.rows;
+export interface MappingProfile {
+    id: string;
+    name: string;
+    description?: string;
+    levels: MappingLevel[];
+    fieldAttributes: string[];
+    createdAt: string;
+    updatedAt: string;
 }
