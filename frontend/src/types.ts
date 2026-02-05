@@ -27,6 +27,7 @@ export type PathSegment =
 export interface MappingLevel {
     id: string;
     name: string;
+    role?: 'tab' | 'group' | 'field';
     path: string;
     overridePaths?: string[];
     labelKey?: string;

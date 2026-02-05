@@ -1,28 +1,11 @@
 import { type MappingLevel, type MappingProfile, type PathSegment } from './types';
 
-export interface MappedField {
+export interface MappedNode {
     id: string;
-    label: string;
+    title: string;
     path: PathSegment[];
     value: unknown;
-}
-
-export interface MappedSection {
-    id: string;
-    title: string;
-    path: PathSegment[];
-    fields: MappedField[];
-}
-
-export interface MappedTab {
-    id: string;
-    title: string;
-    path: PathSegment[];
-    sections: MappedSection[];
-}
-
-export interface MappedLayout {
-    tabs: MappedTab[];
+    children?: MappedNode[];
 }
 
 type PathToken = {
@@ -36,6 +19,11 @@ const asObject = (value: unknown): value is Record<string, unknown> =>
 const parsePath = (path: string): PathToken[] => {
     if (!path.trim()) return [];
     return path.split('.').map(segment => {
+        const arrayOnlyMatch = segment.match(/^\[(\*|\d+)\]$/);
+        if (arrayOnlyMatch) {
+            const indexRaw = arrayOnlyMatch[1];
+            return { key: '', index: indexRaw === '*' ? '*' : Number(indexRaw) };
+        }
         const match = segment.match(/^([^[\]]+)(?:\[(\*|\d+)\])?$/);
         if (!match) return { key: segment };
         const key = match[1];
@@ -55,9 +43,12 @@ const resolveTokens = (
     if (!tokens.length) return [{ value, path: basePath }];
 
     const [current, ...rest] = tokens;
-    if (!asObject(value)) return [];
-    const nextValue = value[current.key];
-    const nextPath = [...basePath, { kind: 'object', key: current.key } as PathSegment];
+    const hasObjectKey = Boolean(current.key);
+    if (hasObjectKey && !asObject(value)) return [];
+    const nextValue = hasObjectKey ? (value as Record<string, unknown>)[current.key] : value;
+    const nextPath = hasObjectKey
+        ? [...basePath, { kind: 'object', key: current.key } as PathSegment]
+        : basePath;
 
     if (current.index === undefined) {
         return resolveTokens(nextValue, nextPath, rest);
@@ -104,29 +95,38 @@ const resolveLevel = (
     });
 };
 
-export const buildMappedLayout = (profile: MappingProfile, rootValue: unknown): MappedLayout => {
-    const [level1, level2, level3] = profile.levels;
-    if (!level1 || !level2 || !level3) return { tabs: [] };
+const buildNodeId = (levelIndex: number, path: PathSegment[], index: number) => {
+    const key = path
+        .map(segment => (segment.kind === 'object' ? segment.key : `[${segment.index}]`))
+        .join('.');
+    return `${levelIndex}-${key || 'root'}-${index}`;
+};
 
-    const level1Items = resolveLevel([{ value: rootValue, path: [] }], level1, rootValue);
-    const tabs: MappedTab[] = level1Items.map((tabItem, tabIndex) => {
-        const tabLabel = getLabel(tabItem.value, level1.labelKey, `${level1.name} ${tabIndex + 1}`);
-        const level2Items = resolveLevel([tabItem], level2, rootValue);
-        const sections: MappedSection[] = level2Items.map((sectionItem, sectionIndex) => {
-            const sectionLabel = getLabel(sectionItem.value, level2.labelKey, `${level2.name} ${sectionIndex + 1}`);
-            const level3Items = resolveLevel([sectionItem], level3, rootValue);
-            const fields: MappedField[] = level3Items.map((fieldItem, fieldIndex) => ({
-                id: `${tabIndex}-${sectionIndex}-${fieldIndex}`,
-                label: getLabel(fieldItem.value, level3.labelKey, `${level3.name} ${fieldIndex + 1}`),
-                path: fieldItem.path,
-                value: fieldItem.value
-            }));
-            return { id: `${tabIndex}-${sectionIndex}`, title: sectionLabel, path: sectionItem.path, fields };
+export const buildMappedTree = (profile: MappingProfile, rootValue: unknown): MappedNode[] => {
+    if (!profile.levels.length) return [];
+
+    const buildLevelNodes = (
+        parents: Array<{ value: unknown; path: PathSegment[] }>,
+        levelIndex: number
+    ): MappedNode[] => {
+        const level = profile.levels[levelIndex];
+        if (!level) return [];
+        const items = resolveLevel(parents, level, rootValue);
+        return items.map((item, index) => {
+            const title = getLabel(item.value, level.labelKey, `${level.name} ${index + 1}`);
+            const isLeaf = levelIndex === profile.levels.length - 1;
+            const children = isLeaf ? undefined : buildLevelNodes([item], levelIndex + 1);
+            return {
+                id: buildNodeId(levelIndex, item.path, index),
+                title,
+                path: item.path,
+                value: item.value,
+                children
+            };
         });
-        return { id: `tab-${tabIndex}`, title: tabLabel, path: tabItem.path, sections };
-    });
+    };
 
-    return { tabs };
+    return buildLevelNodes([{ value: rootValue, path: [] }], 0);
 };
 
 const getValueAtPath = (root: any, path: PathSegment[]) => {
@@ -161,8 +161,8 @@ export const addMappedItem = (
     parentPath: PathSegment[],
     level: MappingLevel
 ): { nextRoot: unknown; newPath: PathSegment[] } | null => {
-    const clonedRoot = JSON.parse(JSON.stringify(rootValue ?? {}));
-    const parentValue = parentPath.length ? getValueAtPath(clonedRoot, parentPath) : clonedRoot;
+    let clonedRoot = JSON.parse(JSON.stringify(rootValue ?? {}));
+    let parentValue = parentPath.length ? getValueAtPath(clonedRoot, parentPath) : clonedRoot;
     if (parentValue === undefined || parentValue === null) return null;
 
     const tokens = parsePath(level.path);
@@ -173,6 +173,41 @@ export const addMappedItem = (
 
     tokens.forEach((token, index) => {
         const isLast = index === tokens.length - 1;
+        if (!token.key) {
+            if (!Array.isArray(current)) {
+                if (parentPath.length === 0 && current === clonedRoot) {
+                    clonedRoot = [];
+                    parentValue = clonedRoot;
+                    current = clonedRoot;
+                } else {
+                    return;
+                }
+            }
+            const arrayValue = current as any[];
+            if (token.index === '*') {
+                if (isLast) {
+                    const newItem = buildNewItem(level);
+                    arrayValue.push(newItem);
+                    const newIndex = arrayValue.length - 1;
+                    currentPath = [...currentPath, { kind: 'array', index: newIndex }];
+                    current = newItem;
+                    return;
+                }
+                const newContainer: Record<string, unknown> = {};
+                arrayValue.push(newContainer);
+                const newIndex = arrayValue.length - 1;
+                currentPath = [...currentPath, { kind: 'array', index: newIndex }];
+                current = newContainer;
+                return;
+            }
+            const targetIndex = typeof token.index === 'number' ? token.index : 0;
+            while (arrayValue.length <= targetIndex) {
+                arrayValue.push({});
+            }
+            currentPath = [...currentPath, { kind: 'array', index: targetIndex }];
+            current = arrayValue[targetIndex];
+            return;
+        }
         if (!asObject(current)) {
             current = ensureObject(current);
         }

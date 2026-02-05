@@ -17,6 +17,7 @@ import {
 import { addMappedItem } from '../profileMapping';
 import {
     createEmptyProfile,
+    createEmptyLevel,
     createFormLayoutProfile,
     loadActiveProfileId,
     loadLayoutMode,
@@ -26,6 +27,7 @@ import {
     saveProfiles,
     type LayoutMode
 } from '../layoutProfiles';
+import { createId } from '../schema';
 
 const INITIAL_DATA: unknown = {};
 
@@ -48,6 +50,10 @@ interface EditorContextType {
     updateProfileMeta: (profileId: string, name: string, description?: string) => void;
     updateProfileLevel: (profileId: string, levelIndex: number, update: Partial<MappingLevel>) => void;
     updateProfileFieldAttributes: (profileId: string, attrs: string[]) => void;
+    addProfileLevel: (profileId: string, initial?: Partial<MappingLevel>) => void;
+    removeProfileLevel: (profileId: string, levelIndex: number) => void;
+    reorderProfileLevels: (profileId: string, fromIndex: number, toIndex: number) => void;
+    replaceProfile: (profile: MappingProfile) => void;
     addProfileNode: (levelIndex: number, parentPath: PathSegment[]) => void;
     selectNode: (node: JsonNode | null) => void;
     setFromJson: (raw: unknown) => void;
@@ -399,18 +405,37 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
     };
 
     const importProfile = (profile: MappingProfile) => {
-        const normalized: MappingProfile = {
-            ...profile,
-            id: profile.id || createEmptyProfile(profile.name || 'Imported Profile').id,
-            createdAt: profile.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-        };
+        let normalized: MappingProfile | null = null;
         setProfiles(prev => {
-            const next = [...prev, normalized];
+            const existingIds = new Set(prev.map(item => item.id));
+            const levelIds = new Set<string>();
+            const nextProfileId = profile.id && !existingIds.has(profile.id) ? profile.id : createId();
+            const normalizedLevels = (profile.levels ?? []).map((level, index) => {
+                const candidateId = level.id || createId();
+                const nextId = levelIds.has(candidateId) ? createId() : candidateId;
+                levelIds.add(nextId);
+                return {
+                    ...level,
+                    id: nextId,
+                    name: level.name || `Level ${index + 1}`
+                };
+            });
+            normalized = {
+                ...profile,
+                id: nextProfileId,
+                levels: normalizedLevels,
+                createdAt: profile.createdAt || new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+            const next = prev.some(item => item.id === normalized!.id || item.name === normalized!.name)
+                ? prev.map(item => (item.id === normalized!.id || item.name === normalized!.name) ? normalized! : item)
+                : [...prev, normalized];
             saveProfiles(next);
             return next;
         });
-        setActiveProfileId(normalized.id);
+        if (normalized) {
+            setActiveProfileId(normalized.id);
+        }
         setLayoutMode('profile');
     };
 
@@ -442,6 +467,82 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
             fieldAttributes: attrs,
             updatedAt: new Date().toISOString()
         }));
+    };
+
+    const addProfileLevel = (profileId: string, initial: Partial<MappingLevel> = {}) => {
+        updateProfile(profileId, profile => {
+            const nextIndex = profile.levels.length + 1;
+            const levels = profile.levels.map((level, index) => {
+                if (index === profile.levels.length - 1 && level.role === 'field') {
+                    return { ...level, role: 'group' };
+                }
+                return level;
+            });
+            const nextLevel = {
+                ...createEmptyLevel(`Level ${nextIndex}`, 'field'),
+                ...initial
+            };
+            return {
+                ...profile,
+                levels: [...levels, nextLevel],
+                updatedAt: new Date().toISOString()
+            };
+        });
+    };
+
+    const removeProfileLevel = (profileId: string, levelIndex: number) => {
+        updateProfile(profileId, profile => {
+            if (profile.levels.length <= 1) return profile;
+            const levels = profile.levels.filter((_, index) => index !== levelIndex);
+            const lastIndex = levels.length - 1;
+            const normalized = levels.map((level, index) => {
+                if (index === lastIndex) {
+                    return { ...level, role: 'field' };
+                }
+                return level;
+            });
+            return {
+                ...profile,
+                levels: normalized,
+                updatedAt: new Date().toISOString()
+            };
+        });
+    };
+
+    const reorderProfileLevels = (profileId: string, fromIndex: number, toIndex: number) => {
+        updateProfile(profileId, profile => {
+            if (fromIndex === toIndex) return profile;
+            const levels = [...profile.levels];
+            const [moved] = levels.splice(fromIndex, 1);
+            levels.splice(toIndex, 0, moved);
+            const lastIndex = levels.length - 1;
+            const normalized = levels.map((level, index) => {
+                if (index === lastIndex) {
+                    return { ...level, role: 'field' };
+                }
+                return level;
+            });
+            return {
+                ...profile,
+                levels: normalized,
+                updatedAt: new Date().toISOString()
+            };
+        });
+    };
+
+    const replaceProfile = (profile: MappingProfile) => {
+        setProfiles(prev => {
+            const exists = prev.some(item => item.id === profile.id);
+            const next = exists
+                ? prev.map(item => item.id === profile.id ? { ...profile, updatedAt: new Date().toISOString() } : item)
+                : [...prev, { ...profile, updatedAt: new Date().toISOString() }];
+            saveProfiles(next);
+            return next;
+        });
+        setActiveProfileId(profile.id);
+        saveActiveProfileId(profile.id);
+        setLayoutModeState('profile');
+        saveLayoutMode('profile');
     };
 
     const addProfileNode = (levelIndex: number, parentPath: PathSegment[]) => {
@@ -478,6 +579,10 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
             updateProfileMeta,
             updateProfileLevel,
             updateProfileFieldAttributes,
+            addProfileLevel,
+            removeProfileLevel,
+            reorderProfileLevels,
+            replaceProfile,
             addProfileNode,
             selectNode: node => setSelectedId(node?.id ?? null),
             setFromJson,
@@ -514,6 +619,10 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
             updateNodeType,
             updateArrayItemType,
             updateEnumValues,
+            addProfileLevel,
+            removeProfileLevel,
+            reorderProfileLevels,
+            replaceProfile,
             addChildNode,
             deleteNode,
             moveNode,

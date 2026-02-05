@@ -16,7 +16,14 @@ export const loadProfiles = (): MappingProfile[] => {
         if (!raw) return [];
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
-        return parsed.map(normalizeProfile).filter(Boolean) as MappingProfile[];
+        const normalized = parsed.map(normalizeProfile).filter(Boolean) as MappingProfile[];
+        const seen = new Set<string>();
+        return normalized.filter(profile => {
+            const key = profile.id || profile.name;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
     } catch {
         return [];
     }
@@ -57,22 +64,7 @@ export const createEmptyProfile = (name: string): MappingProfile => {
             {
                 id: createId(),
                 name: 'Level 1',
-                path: '',
-                labelKey: 'name',
-                filterKey: '',
-                filterValues: []
-            },
-            {
-                id: createId(),
-                name: 'Level 2',
-                path: '',
-                labelKey: 'name',
-                filterKey: '',
-                filterValues: []
-            },
-            {
-                id: createId(),
-                name: 'Level 3',
+                role: 'field',
                 path: '',
                 labelKey: 'name',
                 filterKey: '',
@@ -85,17 +77,62 @@ export const createEmptyProfile = (name: string): MappingProfile => {
     };
 };
 
-const normalizeProfile = (raw: any): MappingProfile | null => {
-    if (!raw || typeof raw !== 'object') return null;
-    if (Array.isArray(raw.levels)) {
-        return raw as MappingProfile;
-    }
-    return null;
-};
-
-const buildLevel = (name: string, path: string, labelKey: string, filterKey: string, filterValues: string[], overridePaths?: string[]): MappingLevel => ({
+export const createEmptyLevel = (name: string, role: MappingLevel['role'] = 'group'): MappingLevel => ({
     id: createId(),
     name,
+    role,
+    path: '',
+    labelKey: 'name',
+    filterKey: '',
+    filterValues: []
+});
+
+const normalizePathString = (path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return '';
+    let fixed = trimmed
+        .replace(/\s*\.\s*/g, '.')
+        .replace(/\s*\[\s*/g, '[')
+        .replace(/\s*\]\s*/g, ']');
+    fixed = fixed.replace(/(\])(?=[A-Za-z0-9_])/g, '$1.');
+    fixed = fixed.replace(/\.+/g, '.');
+    fixed = fixed.replace(/^\.|\.$/g, '');
+    return fixed;
+};
+
+const normalizeProfile = (raw: any): MappingProfile | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    if (!Array.isArray(raw.levels)) return null;
+    const profileId = typeof raw.id === 'string' ? raw.id : createId();
+    const levelIds = new Set<string>();
+    const levels = raw.levels.map((level: any, index: number) => {
+        const candidateId = typeof level?.id === 'string' ? level.id : createId();
+        const id = levelIds.has(candidateId) ? createId() : candidateId;
+        levelIds.add(id);
+        return {
+            id,
+            name: typeof level?.name === 'string' ? level.name : `Level ${index + 1}`,
+            role: level?.role,
+            path: typeof level?.path === 'string' ? normalizePathString(level.path) : '',
+            labelKey: typeof level?.labelKey === 'string' ? level.labelKey : 'name',
+            filterKey: typeof level?.filterKey === 'string' ? level.filterKey : '',
+            filterValues: Array.isArray(level?.filterValues) ? level.filterValues : [],
+            overridePaths: Array.isArray(level?.overridePaths) ? level.overridePaths : undefined
+        } as MappingLevel;
+    });
+    return {
+        ...raw,
+        id: profileId,
+        levels,
+        createdAt: raw.createdAt ?? new Date().toISOString(),
+        updatedAt: raw.updatedAt ?? new Date().toISOString()
+    } as MappingProfile;
+};
+
+const buildLevel = (name: string, path: string, labelKey: string, filterKey: string, filterValues: string[], overridePaths?: string[], role?: MappingLevel['role']): MappingLevel => ({
+    id: createId(),
+    name,
+    role,
     path,
     labelKey,
     filterKey,
@@ -113,9 +150,9 @@ export const createFormLayoutProfile = (raw: unknown): MappingProfile | null => 
         name: 'Form Layout (Tabs/Sections/Fields)',
         description: 'Levels map tabs → sections → fields for the original form layout JSON.',
         levels: [
-            buildLevel('Tabs', 'tabs[*]', 'name', 'type', ['TAB']),
-            buildLevel('Sections', 'contents.rows[*].contents[*]', 'name', 'type', ['SECTION', 'SUBFORM']),
-            buildLevel('Fields', 'contents.rows[*].contents[*]', 'name', 'type', ['FIELD'])
+            buildLevel('Tabs', 'tabs[*]', 'name', 'type', ['TAB'], undefined, 'tab'),
+            buildLevel('Sections', 'contents.rows[*].contents[*]', 'name', 'type', ['SECTION', 'SUBFORM'], undefined, 'group'),
+            buildLevel('Fields', 'contents.rows[*].contents[*]', 'name', 'type', ['FIELD'], undefined, 'field')
         ],
         fieldAttributes: ['name', 'width', 'offset', 'type', 'rule'],
         createdAt: now,

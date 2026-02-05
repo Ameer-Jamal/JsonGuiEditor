@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { useEditor } from '../context/EditorContext';
-import { type JsonNode } from '../types';
+import { type JsonNode, type PathSegment } from '../types';
 import { ChevronRight, Box, List, Type, ToggleLeft, Hash } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ExcelImporter } from './ExcelImporter';
 import { JsonImporter } from './JsonImporter';
 import { ContextMenu } from './ContextMenu';
 import { ProfileManager } from './ProfileManager';
-import { buildMappedLayout } from '../profileMapping';
+import { buildMappedTree, type MappedNode } from '../profileMapping';
 import { findJsonNodeByPath, jsonTreeToValue } from '../schema';
 
 import {
@@ -44,27 +44,18 @@ const getNodeLabel = (node: JsonNode, index: number | null, parentType?: string)
     return 'root';
 };
 
-const filterProfileLayout = (layout: ReturnType<typeof buildMappedLayout>, term: string) => {
+const filterMappedTree = (nodes: MappedNode[], term: string): MappedNode[] => {
     const lowered = term.trim().toLowerCase();
-    if (!lowered) return layout;
-    const tabs = layout.tabs
-        .map(tab => {
-            const tabMatch = tab.title.toLowerCase().includes(lowered);
-            const sections = tab.sections
-                .map(section => {
-                    const sectionMatch = section.title.toLowerCase().includes(lowered);
-                    const fields = section.fields.filter(field => field.label.toLowerCase().includes(lowered));
-                    if (sectionMatch) return { ...section, fields };
-                    if (fields.length > 0) return { ...section, fields };
-                    return null;
-                })
-                .filter(Boolean) as typeof tab.sections;
-            if (tabMatch) return { ...tab, sections };
-            if (sections.length > 0) return { ...tab, sections };
+    if (!lowered) return nodes;
+    return nodes
+        .map(node => {
+            const titleMatch = node.title.toLowerCase().includes(lowered);
+            const children = node.children ? filterMappedTree(node.children, term) : [];
+            if (titleMatch) return { ...node, children };
+            if (children.length > 0) return { ...node, children };
             return null;
         })
-        .filter(Boolean) as typeof layout.tabs;
-    return { ...layout, tabs };
+        .filter(Boolean) as MappedNode[];
 };
 
 const filterRawTree = (node: JsonNode, term: string): JsonNode | null => {
@@ -211,6 +202,7 @@ export const Sidebar = () => {
     const [activeTab, setActiveTab] = useState<'tree' | 'profile'>('tree');
     const [treeView, setTreeView] = useState<'profile' | 'raw'>('profile');
     const [searchTerm, setSearchTerm] = useState('');
+    const [structureView, setStructureView] = useState(true);
     const [profileMenu, setProfileMenu] = useState<{
         x: number;
         y: number;
@@ -218,43 +210,64 @@ export const Sidebar = () => {
         parentPath: any[];
         label: string;
     } | null>(null);
-    const profileLayout = useMemo(() => {
+    const profileTree = useMemo(() => {
         if (!activeProfile) return null;
-        return buildMappedLayout(activeProfile, jsonTreeToValue(valueTree));
+        return buildMappedTree(activeProfile, jsonTreeToValue(valueTree));
     }, [activeProfile, valueTree]);
 
-    const filteredProfileLayout = useMemo(() => {
-        if (!profileLayout) return null;
-        return filterProfileLayout(profileLayout, searchTerm);
-    }, [profileLayout, searchTerm]);
+    const normalizePathKey = (path: PathSegment[]) =>
+        path.map(segment => segment.kind === 'object' ? segment.key : '[*]').join('.');
+
+    const collapseMappedTree = (nodes: MappedNode[], levelIndex: number): MappedNode[] => {
+        if (!activeProfile) return nodes;
+        const groups = new Map<string, MappedNode[]>();
+        nodes.forEach(node => {
+            const key = normalizePathKey(node.path);
+            const existing = groups.get(key) ?? [];
+            existing.push(node);
+            groups.set(key, existing);
+        });
+        return Array.from(groups.values()).map(group => {
+            const base = group[0];
+            const hasDifferentTitles = group.some(node => node.title !== base.title);
+            const mergedTitle = hasDifferentTitles
+                ? (activeProfile.levels[levelIndex]?.name ?? base.title)
+                : base.title;
+            const children = base.children ? collapseMappedTree(base.children, levelIndex + 1) : undefined;
+            return { ...base, title: mergedTitle, children };
+        });
+    };
+
+    const filteredProfileTree = useMemo(() => {
+        if (!profileTree) return null;
+        const base = structureView ? collapseMappedTree(profileTree, 0) : profileTree;
+        return filterMappedTree(base, searchTerm);
+    }, [profileTree, searchTerm, structureView]);
 
     const filteredRawTree = useMemo(() => filterRawTree(valueTree, searchTerm), [searchTerm, valueTree]);
 
     const handleProfileMenu = (event: React.MouseEvent, levelIndex: number, parentPath: any[]) => {
         event.preventDefault();
         if (!activeProfile) return;
+        const targetLevel = activeProfile.levels[levelIndex];
+        if (!targetLevel) return;
         setProfileMenu({
             x: event.clientX,
             y: event.clientY,
             levelIndex,
             parentPath,
-            label: activeProfile.levels[levelIndex]?.name ?? 'Item'
+            label: targetLevel.name ?? 'Item'
         });
     };
 
     const renderProfileTree = () => {
-        const layout = filteredProfileLayout;
-        if (!layout?.tabs.length) {
+        const nodes = filteredProfileTree;
+        if (!nodes?.length) {
             return (
                 <div className="text-xs text-slate-400 p-3">
                     No profile mapping results. Update the profile paths and filters.
                 </div>
             );
-        }
-
-        let tabs = layout.tabs;
-        if (tabs.length === 1) {
-            tabs = tabs.map(tab => ({ ...tab, title: '' }));
         }
 
         return (
@@ -268,15 +281,15 @@ export const Sidebar = () => {
                         Add {activeProfile.levels[0]?.name ?? 'Item'}
                     </button>
                 )}
-                {tabs.map(tab => (
-                    <ProfileTreeTab
-                        key={tab.id}
-                        tab={tab}
+                {nodes.map(node => (
+                    <ProfileTreeNode
+                        key={node.id}
+                        node={node}
+                        levelIndex={0}
                         selectNode={selectNode}
                         selectedNode={selectedNode}
                         valueTree={valueTree}
-                        onContextMenu={(event, parentPath) => handleProfileMenu(event, 1, parentPath)}
-                        onSectionContextMenu={(event, parentPath) => handleProfileMenu(event, 2, parentPath)}
+                        onContextMenu={handleProfileMenu}
                     />
                 ))}
             </div>
@@ -370,11 +383,11 @@ export const Sidebar = () => {
     return (
         <div className="flex flex-col h-full">
             <div className="p-3 border-b border-slate-100 bg-slate-50/50 space-y-3">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                     <ExcelImporter />
                     <JsonImporter />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                     <button
                         type="button"
                         onClick={() => setActiveTab('tree')}
@@ -402,7 +415,7 @@ export const Sidebar = () => {
                 </div>
                 {activeTab === 'tree' && (
                     <>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
                                 onClick={() => setTreeView('profile')}
@@ -429,6 +442,23 @@ export const Sidebar = () => {
                                 Raw Tree
                             </button>
                         </div>
+                        {treeView === 'profile' && activeProfile && (
+                            <div className="flex items-center justify-between text-[11px] text-slate-500">
+                                <span>Structure View</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setStructureView(prev => !prev)}
+                                    className={clsx(
+                                        "px-2 py-1 text-[11px] font-medium rounded border transition-colors",
+                                        structureView
+                                            ? "bg-slate-900 text-white border-slate-900"
+                                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                                    )}
+                                >
+                                    {structureView ? 'On' : 'Off'}
+                                </button>
+                            </div>
+                        )}
                         <input
                             type="text"
                             value={searchTerm}
@@ -480,152 +510,61 @@ export const Sidebar = () => {
     );
 };
 
-const ProfileTreeTab = ({
-    tab,
-    selectNode,
-    selectedNode,
-    valueTree,
-    onContextMenu,
-    onSectionContextMenu
-}: {
-    tab: { id: string; title: string; path: any; sections: any[] };
-    selectNode: (node: JsonNode) => void;
-    selectedNode: JsonNode | null;
-    valueTree: JsonNode;
-    onContextMenu: (event: React.MouseEvent, parentPath: any[]) => void;
-    onSectionContextMenu: (event: React.MouseEvent, parentPath: any[]) => void;
-}) => {
-    const [open, setOpen] = useState(true);
-    const resolvedTabNode = findJsonNodeByPath(valueTree, tab.path);
-
-    const sections = tab.sections.length === 1 && !tab.title
-        ? tab.sections.map(section => ({ ...section, title: '' }))
-        : tab.sections;
-
-    return (
-        <div className="space-y-1">
-            {tab.title && (
-                <button
-                    type="button"
-                    onClick={() => {
-                        setOpen(prev => !prev);
-                        if (resolvedTabNode) selectNode(resolvedTabNode);
-                    }}
-                    onContextMenu={(event) => onContextMenu(event, tab.path)}
-                    className={clsx(
-                        "flex items-center gap-2 text-xs font-semibold text-slate-700 px-2 py-1 rounded hover:bg-slate-100",
-                        selectedNode?.id === resolvedTabNode?.id && "bg-blue-50 text-blue-700"
-                    )}
-                >
-                    <ChevronRight className={clsx("w-3 h-3 transition-transform", open && "rotate-90")} />
-                    <span className="truncate">{tab.title}</span>
-                </button>
-            )}
-
-            {open && (
-                <div className="space-y-1 pl-2">
-                    {sections.map(section => (
-                        <ProfileTreeSection
-                            key={section.id}
-                            section={section}
-                            selectNode={selectNode}
-                            selectedNode={selectedNode}
-                            valueTree={valueTree}
-                            onContextMenu={onSectionContextMenu}
-                        />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-};
-
-const ProfileTreeSection = ({
-    section,
+const ProfileTreeNode = ({
+    node,
+    levelIndex,
     selectNode,
     selectedNode,
     valueTree,
     onContextMenu
 }: {
-    section: { id: string; title: string; path: any; fields: any[] };
+    node: MappedNode;
+    levelIndex: number;
     selectNode: (node: JsonNode) => void;
     selectedNode: JsonNode | null;
     valueTree: JsonNode;
-    onContextMenu: (event: React.MouseEvent, parentPath: any[]) => void;
+    onContextMenu: (event: React.MouseEvent, levelIndex: number, parentPath: any[]) => void;
 }) => {
     const [open, setOpen] = useState(true);
-    const resolvedSectionNode = findJsonNodeByPath(valueTree, section.path);
-    const fields = section.fields;
+    const resolvedNode = findJsonNodeByPath(valueTree, node.path);
+    const isSelected = resolvedNode && selectedNode?.id === resolvedNode.id;
+    const hasChildren = Boolean(node.children && node.children.length > 0);
 
     return (
         <div className="space-y-1">
-            {section.title && (
-                <button
-                    type="button"
-                    onClick={() => {
-                        setOpen(prev => !prev);
-                        if (resolvedSectionNode) selectNode(resolvedSectionNode);
-                    }}
-                    onContextMenu={(event) => onContextMenu(event, section.path)}
-                    className={clsx(
-                        "flex items-center gap-2 text-[11px] font-medium text-slate-600 px-2 py-1 rounded hover:bg-slate-100",
-                        selectedNode?.id === resolvedSectionNode?.id && "bg-blue-50 text-blue-700"
-                    )}
-                >
+            <button
+                type="button"
+                onClick={() => {
+                    setOpen(prev => !prev);
+                    if (resolvedNode) selectNode(resolvedNode);
+                }}
+                onContextMenu={(event) => onContextMenu(event, levelIndex + 1, node.path)}
+                className={clsx(
+                    "flex items-center gap-2 text-[11px] font-medium text-slate-600 px-2 py-1 rounded hover:bg-slate-100",
+                    isSelected && "bg-blue-50 text-blue-700"
+                )}
+            >
+                {hasChildren && (
                     <ChevronRight className={clsx("w-3 h-3 transition-transform", open && "rotate-90")} />
-                    <span className="truncate">{section.title}</span>
-                </button>
-            )}
-            {open && (
+                )}
+                <span className="truncate">{node.title}</span>
+            </button>
+            {hasChildren && open && (
                 <div className="space-y-1 pl-3">
-                    {fields.map(field => (
-                        <ProfileTreeField
-                            key={field.id}
-                            field={field}
+                    {node.children!.map(child => (
+                        <ProfileTreeNode
+                            key={child.id}
+                            node={child}
+                            levelIndex={levelIndex + 1}
                             selectNode={selectNode}
                             selectedNode={selectedNode}
                             valueTree={valueTree}
-                            parentPath={section.path}
                             onContextMenu={onContextMenu}
                         />
                     ))}
                 </div>
             )}
         </div>
-    );
-};
-
-const ProfileTreeField = ({
-    field,
-    selectNode,
-    selectedNode,
-    valueTree,
-    parentPath,
-    onContextMenu
-}: {
-    field: { id: string; label: string; path: any };
-    selectNode: (node: JsonNode) => void;
-    selectedNode: JsonNode | null;
-    valueTree: JsonNode;
-    parentPath: any[];
-    onContextMenu: (event: React.MouseEvent, parentPath: any[]) => void;
-}) => {
-    const resolvedFieldNode = findJsonNodeByPath(valueTree, field.path);
-    const isSelected = resolvedFieldNode && selectedNode?.id === resolvedFieldNode.id;
-    return (
-        <button
-            type="button"
-            onClick={() => {
-                if (resolvedFieldNode) selectNode(resolvedFieldNode);
-            }}
-            onContextMenu={(event) => onContextMenu(event, parentPath)}
-            className={clsx(
-                "flex items-center gap-2 text-[11px] text-slate-600 px-2 py-1 rounded hover:bg-slate-100",
-                isSelected && "bg-blue-50 text-blue-700"
-            )}
-        >
-            <span className="truncate">{field.label}</span>
-        </button>
     );
 };
 

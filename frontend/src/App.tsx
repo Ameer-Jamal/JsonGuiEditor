@@ -4,7 +4,7 @@ import { ToastProvider } from './components/ToastProvider';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { Preview } from './components/Preview';
-import { Download, Copy, Check } from 'lucide-react';
+import { Download, Copy, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import { jsonTreeToValue } from './schema';
 
 function Layout() {
@@ -14,6 +14,8 @@ function Layout() {
   const [rightWidth, setRightWidth] = useState(320);
   const [isResizingLeft, setIsResizingLeft] = useState(false);
   const [isResizingRight, setIsResizingRight] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
 
   // Resize handlers
   const startResizingLeft = useCallback(() => setIsResizingLeft(true), []);
@@ -95,31 +97,45 @@ function Layout() {
       {/* Left Sidebar: Tree View */}
       <div
         className="bg-white border-r border-slate-200 flex flex-col z-20 shadow-sm relative group"
-        style={{ width: leftWidth, minWidth: leftWidth }}
+        style={{ width: leftCollapsed ? 44 : leftWidth, minWidth: leftCollapsed ? 44 : leftWidth }}
       >
-        <div className="h-16 flex items-center px-6 border-b border-slate-100 bg-white">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-500/20 shadow-lg">
-              JE
+        <div className="h-16 flex items-center justify-between px-3 border-b border-slate-100 bg-white">
+          {!leftCollapsed && (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-blue-500/20 shadow-lg">
+                JE
+              </div>
+              <div>
+                <h1 className="font-bold text-sm text-slate-800 leading-tight">JSON Editor</h1>
+                <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Builder</p>
+              </div>
             </div>
-            <div>
-              <h1 className="font-bold text-sm text-slate-800 leading-tight">JSON Editor</h1>
-              <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Builder</p>
-            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setLeftCollapsed(prev => !prev)}
+            className="ml-auto w-8 h-8 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500"
+            aria-label={leftCollapsed ? 'Expand left panel' : 'Collapse left panel'}
+          >
+            {leftCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          </button>
+        </div>
+        {!leftCollapsed && (
+          <div className="flex-1 overflow-auto p-4 custom-scrollbar">
+            <Sidebar />
           </div>
-        </div>
-        <div className="flex-1 overflow-auto p-4 custom-scrollbar">
-          <Sidebar />
-        </div>
+        )}
 
         {/* Resizer Handle */}
-        <button
-          type="button"
-          aria-label="Resize left panel"
-          className="absolute top-0 right-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[50%] bg-transparent"
-          onMouseDown={startResizingLeft}
-          onKeyDown={handleLeftResizeKey}
-        />
+        {!leftCollapsed && (
+          <button
+            type="button"
+            aria-label="Resize left panel"
+            className="absolute top-0 right-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[50%] bg-transparent"
+            onMouseDown={startResizingLeft}
+            onKeyDown={handleLeftResizeKey}
+          />
+        )}
       </div>
 
       {/* Middle: Canvas / Preview */}
@@ -165,23 +181,37 @@ function Layout() {
       {/* Right Sidebar: Inspector */}
       <div
         className="bg-white border-l border-slate-200 flex flex-col z-20 shadow-sm relative group"
-        style={{ width: rightWidth, minWidth: rightWidth }}
+        style={{ width: rightCollapsed ? 44 : rightWidth, minWidth: rightCollapsed ? 44 : rightWidth }}
       >
         {/* Resizer Handle (Left Side of Right Sidebar) */}
-        <button
-          type="button"
-          aria-label="Resize right panel"
-          className="absolute top-0 left-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[-50%] bg-transparent"
-          onMouseDown={startResizingRight}
-          onKeyDown={handleRightResizeKey}
-        />
+        {!rightCollapsed && (
+          <button
+            type="button"
+            aria-label="Resize right panel"
+            className="absolute top-0 left-0 w-4 h-full cursor-col-resize hover:bg-blue-500/10 transition-colors z-50 translate-x-[-50%] bg-transparent"
+            onMouseDown={startResizingRight}
+            onKeyDown={handleRightResizeKey}
+          />
+        )}
 
-        <div className="h-16 flex items-center px-6 border-b border-slate-100 bg-white">
-          <h2 className="font-semibold text-sm text-slate-800">Properties</h2>
+        <div className="h-16 flex items-center justify-between px-3 border-b border-slate-100 bg-white">
+          {!rightCollapsed && (
+            <h2 className="font-semibold text-sm text-slate-800">Properties</h2>
+          )}
+          <button
+            type="button"
+            onClick={() => setRightCollapsed(prev => !prev)}
+            className="ml-auto w-8 h-8 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500"
+            aria-label={rightCollapsed ? 'Expand right panel' : 'Collapse right panel'}
+          >
+            {rightCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </button>
         </div>
-        <div className="flex-1 overflow-auto p-0">
-          <Inspector />
-        </div>
+        {!rightCollapsed && (
+          <div className="flex-1 overflow-auto p-0">
+            <Inspector />
+          </div>
+        )}
       </div>
     </div>
   );

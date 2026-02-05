@@ -4,7 +4,7 @@ import { createSchemaNode, findJsonNodeByPath, findSchemaNodeByPath, jsonTreeToV
 import { type JsonNode, type SchemaNode } from '../types';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
-import { buildMappedLayout } from '../profileMapping';
+import { buildMappedTree, type MappedNode } from '../profileMapping';
 
 const PrimitiveField = ({ node, schema }: { node: JsonNode; schema: SchemaNode }) => {
     const { updateNodeValue } = useEditor();
@@ -111,84 +111,168 @@ const ProfileFieldCard = ({
     </div>
 );
 
-const ProfileSectionView = ({
-    section,
+const ProfileLeafNode = ({
+    node,
     valueTree,
     schema,
     selectNode,
     selectedNode
 }: {
-    section: { id: string; title: string; path: any; fields: { id: string; label: string; path: any }[] };
+    node: MappedNode;
     valueTree: JsonNode;
     schema: SchemaNode;
     selectNode: (node: JsonNode) => void;
     selectedNode: JsonNode | null;
-}) => (
-    <div className="rounded-2xl border border-slate-200 bg-white/80 p-5 space-y-4">
-        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">{section.title}</div>
-        <div className="grid grid-cols-12 gap-4">
-            {section.fields.map(field => {
-                const node = findJsonNodeByPath(valueTree, field.path);
-                if (!node) {
-                    return (
-                        <div key={field.id} className="col-span-12 text-[11px] text-red-500">
-                            Missing node for {field.label || 'field'}
-                        </div>
-                    );
-                }
-                const nodeSchema = findSchemaNodeByPath(schema, field.path) ?? createSchemaNode(node.type);
-                if (isFormLayoutField(node)) {
-                    const nameValue = getChildValue(node, 'name');
-                    const widthValue = getChildValue(node, 'width');
-                    const fieldWidth = typeof widthValue === 'number' ? widthValue : 12;
-                    const isSelected = selectedNode?.id === node.id;
-                    return (
-                        <ProfileFieldCard
-                            key={field.id}
-                            label={String(nameValue ?? field.label ?? 'Field')}
-                            placeholder={String(nameValue ?? '')}
-                            width={fieldWidth}
-                            isSelected={isSelected}
-                            onSelect={() => selectNode(node)}
-                        />
-                    );
-                }
-                return (
-                    <div key={field.id} className="col-span-12">
-                        {field.label && node.type !== 'object' && node.type !== 'array' && (
-                            <div className="text-[11px] text-slate-500 mb-1">{field.label}</div>
-                        )}
-                        <NodeRenderer node={node} schema={nodeSchema} />
-                    </div>
-                );
-            })}
+}) => {
+    const resolved = findJsonNodeByPath(valueTree, node.path);
+    if (!resolved) {
+        return (
+            <div className="col-span-12 text-[11px] text-red-500">
+                Missing node for {node.title || 'field'}
+            </div>
+        );
+    }
+    const nodeSchema = findSchemaNodeByPath(schema, node.path) ?? createSchemaNode(resolved.type);
+    if (isFormLayoutField(resolved)) {
+        const nameValue = getChildValue(resolved, 'name');
+        const widthValue = getChildValue(resolved, 'width');
+        const fieldWidth = typeof widthValue === 'number' ? widthValue : 12;
+        const isSelected = selectedNode?.id === resolved.id;
+        return (
+            <ProfileFieldCard
+                label={String(nameValue ?? node.title ?? 'Field')}
+                placeholder={String(nameValue ?? '')}
+                width={fieldWidth}
+                isSelected={isSelected}
+                onSelect={() => selectNode(resolved)}
+            />
+        );
+    }
+    return (
+        <div className="col-span-12">
+            {node.title && resolved.type !== 'object' && resolved.type !== 'array' && (
+                <div className="text-[11px] text-slate-500 mb-1">{node.title}</div>
+            )}
+            <NodeRenderer node={resolved} schema={nodeSchema} />
         </div>
-    </div>
-);
+    );
+};
+
+const ProfileGroup = ({
+    node,
+    levelIndex,
+    levels,
+    valueTree,
+    schema,
+    selectNode,
+    selectedNode
+}: {
+    node: MappedNode;
+    levelIndex: number;
+    levels: { name: string }[];
+    valueTree: JsonNode;
+    schema: SchemaNode;
+    selectNode: (node: JsonNode) => void;
+    selectedNode: JsonNode | null;
+}) => {
+    const isLeaf = levelIndex === levels.length - 1;
+    if (isLeaf) {
+        return (
+            <ProfileLeafNode
+                node={node}
+                valueTree={valueTree}
+                schema={schema}
+                selectNode={selectNode}
+                selectedNode={selectedNode}
+            />
+        );
+    }
+
+    const nextIsLeaf = levelIndex === levels.length - 2;
+    return (
+        <div className="rounded-2xl border border-slate-200 bg-white/80 p-5 space-y-4">
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                {node.title || levels[levelIndex]?.name}
+            </div>
+            {nextIsLeaf ? (
+                <div className="grid grid-cols-12 gap-4">
+                    {(node.children ?? []).map(child => (
+                        <ProfileLeafNode
+                            key={child.id}
+                            node={child}
+                            valueTree={valueTree}
+                            schema={schema}
+                            selectNode={selectNode}
+                            selectedNode={selectedNode}
+                        />
+                    ))}
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    {(node.children ?? []).map(child => (
+                        <ProfileGroup
+                            key={child.id}
+                            node={child}
+                            levelIndex={levelIndex + 1}
+                            levels={levels}
+                            valueTree={valueTree}
+                            schema={schema}
+                            selectNode={selectNode}
+                            selectedNode={selectedNode}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 
 const ProfileLayout = ({
-    tabs,
+    nodes,
     activeTabId,
     setActiveTabId,
     valueTree,
     schema,
     selectNode,
-    selectedNode
+    selectedNode,
+    levels
 }: {
-    tabs: { id: string; title: string; path: any; sections: any[] }[];
+    nodes: MappedNode[];
     activeTabId: string | null;
     setActiveTabId: (id: string) => void;
     valueTree: JsonNode;
     schema: SchemaNode;
     selectNode: (node: JsonNode) => void;
     selectedNode: JsonNode | null;
+    levels: { name: string; role?: 'tab' | 'group' | 'field' }[];
 }) => {
-    const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0];
-    if (!activeTab) return null;
+    if (!nodes.length) return null;
+    const useTabs = levels[0]?.role === 'tab' && nodes.length > 1;
+    const activeNode = nodes.find(tab => tab.id === activeTabId) ?? nodes[0];
+
+    if (!useTabs) {
+        return (
+            <div className="space-y-6">
+                {nodes.map(node => (
+                    <ProfileGroup
+                        key={node.id}
+                        node={node}
+                        levelIndex={0}
+                        levels={levels}
+                        valueTree={valueTree}
+                        schema={schema}
+                        selectNode={selectNode}
+                        selectedNode={selectedNode}
+                    />
+                ))}
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-                {tabs.map(tab => (
+                {nodes.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTabId(tab.id)}
@@ -203,19 +287,33 @@ const ProfileLayout = ({
                     </button>
                 ))}
             </div>
-
-            <div className="space-y-6">
-                {activeTab.sections.map(section => (
-                    <ProfileSectionView
-                        key={section.id}
-                        section={section}
+            {activeNode && levels.length === 1 && (
+                <div className="grid grid-cols-12 gap-4">
+                    <ProfileLeafNode
+                        node={activeNode}
                         valueTree={valueTree}
                         schema={schema}
                         selectNode={selectNode}
                         selectedNode={selectedNode}
                     />
-                ))}
-            </div>
+                </div>
+            )}
+            {activeNode && levels.length > 1 && (
+                <div className="space-y-6">
+                    {(activeNode.children ?? []).map(child => (
+                        <ProfileGroup
+                            key={child.id}
+                            node={child}
+                            levelIndex={1}
+                            levels={levels}
+                            valueTree={valueTree}
+                            schema={schema}
+                            selectNode={selectNode}
+                            selectedNode={selectedNode}
+                        />
+                    ))}
+                </div>
+            )}
         </div>
     );
 };
@@ -309,24 +407,25 @@ export const Preview = () => {
             return;
         }
         const rootValue = jsonTreeToValue(valueTree);
-        const mapped = buildMappedLayout(activeProfile, rootValue);
-        setActiveTabId(mapped.tabs[0]?.id ?? null);
+        const mapped = buildMappedTree(activeProfile, rootValue);
+        setActiveTabId(mapped[0]?.id ?? null);
     }, [activeProfile, valueTree]);
 
     return (
         <div className="w-full">
             {layoutMode === 'profile' && activeProfile ? (
                 (() => {
-                    const mapped = buildMappedLayout(activeProfile, jsonTreeToValue(valueTree));
+                    const mapped = buildMappedTree(activeProfile, jsonTreeToValue(valueTree));
                     return (
                         <ProfileLayout
-                            tabs={mapped.tabs}
+                            nodes={mapped}
                             activeTabId={activeTabId}
                             setActiveTabId={(id) => setActiveTabId(id)}
                             valueTree={valueTree}
                             schema={schema}
                             selectNode={selectNode}
                             selectedNode={selectedNode}
+                            levels={activeProfile.levels}
                         />
                     );
                 })()
