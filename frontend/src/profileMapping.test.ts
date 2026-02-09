@@ -71,6 +71,51 @@ describe('buildMappedTree', () => {
         const mapped = buildMappedTree(profile, data);
         expect(mapped.map(node => node.title)).toEqual(['Alpha', 'Beta']);
     });
+
+    it('keeps mapped order in sync with source array order', () => {
+        const profile = makeProfile([
+            {
+                id: 'lvl-1',
+                name: 'Items',
+                path: 'items[*]',
+                labelKey: 'name'
+            }
+        ]);
+
+        const dataA = { items: [{ name: 'First' }, { name: 'Second' }] };
+        const mappedA = buildMappedTree(profile, dataA);
+        expect(mappedA.map(n => n.title)).toEqual(['First', 'Second']);
+
+        const dataB = { items: [{ name: 'Second' }, { name: 'First' }] };
+        const mappedB = buildMappedTree(profile, dataB);
+        expect(mappedB.map(n => n.title)).toEqual(['Second', 'First']);
+    });
+
+    it('maps nested array indices uniquely for rows/contents', () => {
+        const data = {
+            tabs: [
+                {
+                    name: 'Tab',
+                    type: 'TAB',
+                    contents: {
+                        rows: [
+                            { contents: [{ name: 'FieldA', type: 'FIELD' }] },
+                            { contents: [{ name: 'FieldB', type: 'FIELD' }] }
+                        ]
+                    }
+                }
+            ]
+        };
+        const profile = makeProfile([
+            { id: 't', name: 'Tabs', path: 'tabs[*]', labelKey: 'name', filterKey: 'type', filterValues: ['TAB'] },
+            { id: 's', name: 'Sections', path: 'contents.rows[*].contents[*]', labelKey: 'name', filterKey: 'type', filterValues: ['FIELD'] }
+        ]);
+        const mapped = buildMappedTree(profile, data);
+        expect(mapped[0].children?.map(n => n.path.map(p => p.kind === 'array' ? p.index : p.key))).toEqual([
+            ['tabs', 0, 'contents', 'rows', 0, 'contents', 0],
+            ['tabs', 0, 'contents', 'rows', 1, 'contents', 0],
+        ]);
+    });
 });
 
 describe('addMappedItem', () => {
