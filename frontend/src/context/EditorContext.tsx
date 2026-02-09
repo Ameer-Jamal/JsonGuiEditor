@@ -65,6 +65,8 @@ interface EditorContextType {
     updateNodeFromJson: (id: string, raw: unknown) => void;
     addChildNode: (parentId: string, type: SchemaType) => void;
     deleteNode: (id: string) => void;
+    moveArrayItem: (parentPath: PathSegment[], from: number, to: number) => void;
+    moveArrayItemBetween: (fromParent: PathSegment[], toParent: PathSegment[], from: number, to: number) => void;
     moveNode: (activeId: string, overId: string) => void;
     getRawJson: () => string;
 }
@@ -336,13 +338,54 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
         if (selectedId === id) setSelectedId(null);
     };
 
+    const moveArrayItem = (parentPath: PathSegment[], from: number, to: number) => {
+        const clonedTree = cloneJsonNode(valueTree);
+        const parent = findJsonNodeByPath(clonedTree, parentPath);
+        if (!parent || parent.type !== 'array' || !parent.children) return;
+        const children = [...parent.children];
+        if (from < 0 || from >= children.length || to < 0 || to >= children.length) return;
+        const [moved] = children.splice(from, 1);
+        children.splice(to, 0, moved);
+        parent.children = children;
+        setValueTree(clonedTree);
+    };
+
+    const moveArrayItemBetween = (fromParent: PathSegment[], toParent: PathSegment[], from: number, to: number) => {
+        const clonedTree = cloneJsonNode(valueTree);
+        const source = findJsonNodeByPath(clonedTree, fromParent);
+        const target = findJsonNodeByPath(clonedTree, toParent);
+        if (!source || !target || source.type !== 'array' || target.type !== 'array') return;
+        if (!source.children || !target.children) return;
+        if (from < 0 || from >= source.children.length) return;
+        const movedNode = source.children[from];
+        const nextSource = [...source.children];
+        nextSource.splice(from, 1);
+        const nextTarget = [...target.children];
+        const insertIndex = Math.min(Math.max(to, 0), nextTarget.length);
+        nextTarget.splice(insertIndex, 0, movedNode);
+        source.children = nextSource;
+        target.children = nextTarget;
+        setValueTree(clonedTree);
+    };
+
+    const pathsEqual = (a: PathSegment[], b: PathSegment[]) =>
+        a.length === b.length && a.every((seg, i) =>
+            seg.kind === b[i].kind &&
+            (seg.kind === 'object'
+                ? (seg as any).key === (b[i] as any).key
+                : (seg as any).index === (b[i] as any).index)
+        );
+
     const moveNode = (activeId: string, overId: string) => {
         const clonedTree = cloneJsonNode(valueTree);
         const clonedSchema = cloneSchemaNode(schema);
         const active = findJsonNodeById(clonedTree, activeId);
         const over = findJsonNodeById(clonedTree, overId);
         if (!active || !over || !active.parent || !over.parent) return;
-        if (active.parent.id !== over.parent.id) return;
+        const sameParent =
+            active.parent.id === over.parent.id ||
+            pathsEqual(active.path.slice(0, -1), over.path.slice(0, -1));
+        if (!sameParent) return;
 
         const siblings = active.parent.children ?? [];
         const activeIndex = siblings.findIndex(child => child.id === activeId);
@@ -594,6 +637,8 @@ export function EditorProvider({ children }: Readonly<{ children: React.ReactNod
             updateNodeFromJson,
             addChildNode,
             deleteNode,
+            moveArrayItem,
+            moveArrayItemBetween,
             moveNode,
             getRawJson
         }), [

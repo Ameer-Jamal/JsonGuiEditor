@@ -2,19 +2,20 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useEditor } from '../context/EditorContext';
 import { type JsonNode, type PathSegment } from '../types';
-import { ChevronRight, Box, List, Type, ToggleLeft, Hash, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, Box, List, Type, ToggleLeft, Hash, GripVertical } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ExcelImporter } from './ExcelImporter';
 import { JsonImporter } from './JsonImporter';
 import { ContextMenu } from './ContextMenu';
 import { ProfileManager } from './ProfileManager';
 import { buildMappedTree, type MappedNode } from '../profileMapping';
-import { findJsonNodeByPath, jsonTreeToValue } from '../schema';
+import { findJsonNodeById, findJsonNodeByPath, jsonTreeToValue } from '../schema';
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 
 import {
     DndContext,
     pointerWithin,
+    closestCenter,
     KeyboardSensor,
     PointerSensor,
     useSensor,
@@ -26,6 +27,8 @@ import {
     sortableKeyboardCoordinates,
     verticalListSortingStrategy,
     useSortable,
+    arrayMove,
+    defaultAnimateLayoutChanges
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -72,6 +75,11 @@ const filterRawTree = (node: JsonNode, term: string): JsonNode | null => {
     }
     return null;
 };
+
+function getSortableId(node: MappedNode, tree: JsonNode) {
+    const resolved = findJsonNodeByPath(tree, node.path);
+    return resolved?.id ?? node.id;
+}
 
 const SortableTreeItem = ({ node, level = 0, onContextMenu, parentType, index }: { node: JsonNode, level?: number, parentType?: string, index: number | null, onContextMenu: (e: React.MouseEvent, node: JsonNode) => void }) => {
     const { selectedNode, selectNode } = useEditor();
@@ -196,18 +204,21 @@ const SortableTreeItem = ({ node, level = 0, onContextMenu, parentType, index }:
 };
 
 export const Sidebar = () => {
-    const { valueTree, addChildNode, deleteNode, moveNode, layoutMode, activeProfile, selectNode, selectedNode, addProfileNode, updateNodeFromJson } = useEditor();
+    const { valueTree, addChildNode, deleteNode, moveNode, moveArrayItem, moveArrayItemBetween, layoutMode, activeProfile, selectNode, selectedNode, addProfileNode, updateNodeFromJson } = useEditor();
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, node: JsonNode } | null>(null);
     const [activeTab, setActiveTab] = useState<'tree' | 'profile'>('tree');
     const [treeView, setTreeView] = useState<'profile' | 'raw'>('profile');
     const [searchTerm, setSearchTerm] = useState('');
-    const [structureView, setStructureView] = useState(true);
+    const [structureView, setStructureView] = useState(false);
+    const [draggingId, setDraggingId] = useState<string | null>(null);
+    const [dragOverId, setDragOverId] = useState<string | null>(null);
     type ProfileMenuState = {
         levelIndex: number;
         parentPath: PathSegment[];
         label: string;
         ancestorPaths: PathSegment[][];
-        anchorEl: HTMLElement;
+        anchorEl: HTMLElement | null;
+        virtualPoint: { x: number; y: number } | null;
     } | null;
     const [profileMenu, setProfileMenu] = useState<ProfileMenuState>(null);
     const [menuCoords, setMenuCoords] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -221,10 +232,27 @@ export const Sidebar = () => {
     const [jsonTreeOpen, setJsonTreeOpen] = useState<Set<string>>(() => new Set(['$']));
 
     useEffect(() => {
-        if (!profileMenu?.anchorEl || !profileMenuRef.current) return;
+        if (!profileMenu || !profileMenuRef.current) return;
 
-        const cleanup = autoUpdate(profileMenu.anchorEl, profileMenuRef.current, () => {
-            computePosition(profileMenu.anchorEl, profileMenuRef.current!, {
+        const reference = profileMenu.anchorEl ?? {
+            getBoundingClientRect: () => {
+                const { x, y } = profileMenu.virtualPoint ?? { x: 0, y: 0 };
+                return {
+                    width: 0,
+                    height: 0,
+                    x,
+                    y,
+                    left: x,
+                    right: x,
+                    top: y,
+                    bottom: y
+                } as DOMRect;
+            },
+            contextElement: profileMenu.anchorEl ?? undefined
+        };
+
+        const cleanup = autoUpdate(reference as any, profileMenuRef.current, () => {
+            computePosition(reference as any, profileMenuRef.current!, {
                 placement: 'right-start',
                 strategy: 'fixed',
                 middleware: [offset(6), flip({ padding: 12 }), shift({ padding: 12 })],
@@ -277,21 +305,48 @@ export const Sidebar = () => {
         return filterMappedTree(base, searchTerm);
     }, [profileTree, searchTerm, structureView]);
 
+    type DragMeta = { path: PathSegment[]; resolvedId: string | null };
+    const profileDragMap = useMemo(() => {
+        const map = new Map<string, DragMeta>();
+        const walk = (nodes?: MappedNode[]) => {
+            if (!nodes) return;
+            nodes.forEach(node => {
+                const resolved = findJsonNodeByPath(valueTree, node.path);
+                const key = getSortableId(node, valueTree);
+                map.set(key, { path: node.path, resolvedId: resolved?.id ?? null });
+                walk(node.children);
+            });
+        };
+        walk(filteredProfileTree ?? undefined);
+        return map;
+    }, [filteredProfileTree, valueTree]);
+
     const filteredRawTree = useMemo(() => filterRawTree(valueTree, searchTerm), [searchTerm, valueTree]);
 
-    const handleProfileMenu = (event: React.MouseEvent, levelIndex: number, parentPath: PathSegment[], ancestorPaths: PathSegment[][]) => {
+    const handleProfileMenu = (
+        event: React.MouseEvent,
+        levelIndex: number,
+        parentPath: PathSegment[],
+        ancestorPaths: PathSegment[][],
+        anchor: 'button' | 'cursor' = 'button'
+    ) => {
         event.preventDefault();
         event.stopPropagation();
         if (!activeProfile) return;
         const targetLevel = activeProfile.levels[levelIndex];
         if (!targetLevel) return;
+
+        const isCursor = anchor === 'cursor';
+        const point = isCursor ? { x: event.clientX, y: event.clientY } : null;
+        const el = isCursor ? null : (event.currentTarget as HTMLElement);
         setMenuCoords({ x: event.clientX, y: event.clientY });
         setProfileMenu({
             levelIndex,
             parentPath,
             label: targetLevel.name ?? 'Item',
             ancestorPaths,
-            anchorEl: event.currentTarget as HTMLElement
+            anchorEl: el,
+            virtualPoint: point
         });
     };
 
@@ -316,18 +371,34 @@ export const Sidebar = () => {
                         Add {activeProfile.levels[0]?.name ?? 'Item'}
                     </button>
                 )}
-                {nodes.map(node => (
-                    <ProfileTreeNode
-                        key={node.id}
-                        node={node}
-                        levelIndex={0}
-                        ancestorPaths={[]}
-                        selectNode={selectNode}
-                        selectedNode={selectedNode}
-                        valueTree={valueTree}
-                        onMenu={handleProfileMenu}
-                    />
-                ))}
+                <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={handleProfileDragStart}
+                    onDragOver={handleProfileDragOver}
+                    onDragEnd={(e) => { handleProfileDragEnd(e); resetProfileDrag(); }}
+                    onDragCancel={resetProfileDrag}
+                >
+                    <SortableContext
+                        items={nodes.map(n => getSortableId(n, valueTree))}
+                        strategy={verticalListSortingStrategy}
+                    >
+                        {nodes.map(node => (
+                            <ProfileTreeNode
+                                key={node.id}
+                                node={node}
+                                levelIndex={0}
+                                ancestorPaths={[]}
+                                selectNode={selectNode}
+                                selectedNode={selectedNode}
+                                valueTree={valueTree}
+                                onMenu={handleProfileMenu}
+                                structureView={structureView}
+                                getSortableId={getSortableId}
+                            />
+                        ))}
+                    </SortableContext>
+                </DndContext>
             </div>
         );
     };
@@ -335,7 +406,7 @@ export const Sidebar = () => {
     const sensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
-                distance: 5,
+                distance: 4,
             },
         }),
         useSensor(KeyboardSensor, {
@@ -349,6 +420,53 @@ export const Sidebar = () => {
         if (over && active.id !== over.id) {
             moveNode(active.id as string, over.id as string);
         }
+    };
+
+    const handleProfileDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+        const activeMeta = profileDragMap.get(active.id as string);
+        const overMeta = profileDragMap.get(over.id as string);
+        if (!activeMeta || !overMeta) return;
+        if (!activeMeta.resolvedId || !overMeta.resolvedId) return;
+        const parentPathA = activeMeta.path.slice(0, -1);
+        const parentPathB = overMeta.path.slice(0, -1);
+        const aSeg = activeMeta.path[activeMeta.path.length - 1];
+        const bSeg = overMeta.path[overMeta.path.length - 1];
+        const sameParent =
+            parentPathA.length === parentPathB.length &&
+            parentPathA.every((seg, i) =>
+                seg.kind === parentPathB[i].kind &&
+                (seg.kind === 'object'
+                    ? seg.key === (parentPathB[i] as any).key
+                    : seg.index === (parentPathB[i] as any).index)
+            );
+
+        if (aSeg?.kind === 'array' && bSeg?.kind === 'array') {
+            if (sameParent) {
+                moveArrayItem(parentPathA, aSeg.index, bSeg.index);
+            } else {
+                moveArrayItemBetween(parentPathA, parentPathB, aSeg.index, bSeg.index);
+            }
+            return;
+        }
+
+        // Fallback to id-based reorder (objects or if array path resolution failed)
+        moveNode(activeMeta.resolvedId, overMeta.resolvedId);
+    };
+
+    const handleProfileDragStart = (event: DragEndEvent) => {
+        setDraggingId(event.active.id as string);
+        setDragOverId(event.active.id as string);
+    };
+
+    const handleProfileDragOver = (event: DragEndEvent) => {
+        setDragOverId(event.over?.id as string || null);
+    };
+
+    const resetProfileDrag = () => {
+        setDraggingId(null);
+        setDragOverId(null);
     };
 
     const handleContextMenu = (e: React.MouseEvent, node: JsonNode) => {
@@ -531,6 +649,8 @@ export const Sidebar = () => {
                 <div
                     className="fixed inset-0 z-[9999]"
                     onClick={() => setProfileMenu(null)}
+                    onMouseDown={() => setProfileMenu(null)}
+                    onContextMenu={(e) => { e.preventDefault(); setProfileMenu(null); }}
                     aria-label="Profile menu overlay"
                 >
                     <div
@@ -538,6 +658,7 @@ export const Sidebar = () => {
                         className="absolute bg-white rounded-xl shadow-2xl border border-slate-200 w-56 overflow-hidden text-sm text-slate-700"
                         style={{ top: `${menuCoords.y}px`, left: `${menuCoords.x}px` }}
                         onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
                     >
                         <div className="px-3 py-2 text-[10px] font-semibold text-slate-400 uppercase">Add</div>
                         {activeProfile.levels.map((level, index) => {
@@ -799,7 +920,11 @@ const ProfileTreeNode = ({
     selectNode,
     selectedNode,
     valueTree,
-    onMenu
+    onMenu,
+    structureView,
+    getSortableId,
+    draggingId,
+    dragOverId
 }: {
     node: MappedNode;
     levelIndex: number;
@@ -807,21 +932,80 @@ const ProfileTreeNode = ({
     selectNode: (node: JsonNode) => void;
     selectedNode: JsonNode | null;
     valueTree: JsonNode;
-    onMenu: (event: React.MouseEvent, levelIndex: number, parentPath: PathSegment[], ancestorPaths: PathSegment[][]) => void;
+    onMenu: (event: React.MouseEvent, levelIndex: number, parentPath: PathSegment[], ancestorPaths: PathSegment[][], anchor?: 'button' | 'cursor') => void;
+    structureView: boolean;
+    getSortableId: (node: MappedNode, tree: JsonNode) => string;
+    draggingId: string | null;
+    dragOverId: string | null;
 }) => {
     const [open, setOpen] = useState(true);
     const resolvedNode = findJsonNodeByPath(valueTree, node.path);
     const isSelected = resolvedNode && selectedNode?.id === resolvedNode.id;
     const hasChildren = Boolean(node.children && node.children.length > 0);
+    const sortableId = getSortableId(node, valueTree);
+    const isDraggable = Boolean(resolvedNode) && !structureView;
+    const isDraggingSelf = draggingId === sortableId;
+    const isDragOver = dragOverId === sortableId && draggingId !== sortableId;
 
-    return (
-        <div className="space-y-1">
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        setActivatorNodeRef,
+        transform,
+        isDragging
+    } = useSortable({
+        id: sortableId,
+        disabled: !isDraggable,
+        animateLayoutChanges: defaultAnimateLayoutChanges,
+        transition: {
+            duration: 120,
+            easing: 'cubic-bezier(0.33, 1, 0.68, 1)'
+        },
+        dropAnimation: null
+    });
+
+    const style = {
+        transform: transform ? CSS.Transform.toString(transform) : undefined,
+        transition: transform ? 'transform 120ms cubic-bezier(0.33, 1, 0.68, 1)' : undefined,
+        opacity: isDragging ? 0.6 : 1,
+        boxShadow: isDraggingSelf ? '0 8px 24px rgba(37,99,235,0.18)' : undefined,
+    };
+
+    const content = (
+        <div
+            ref={setNodeRef}
+            style={style}
+            className="space-y-1 cursor-default"
+        >
+            {isDragOver && (
+                <div className="flex items-center text-[10px] text-blue-600 pl-4 -mb-1">
+                    <span className="w-2 h-2 rounded-full bg-blue-500 mr-1" />
+                    <span>Insert here</span>
+                </div>
+            )}
             <div
                 className={clsx(
                     "flex items-center gap-2 text-[11px] font-medium text-slate-600 px-2 py-1 rounded hover:bg-slate-100",
-                    isSelected && "bg-blue-50 text-blue-700"
+                    isSelected && "bg-blue-50 text-blue-700",
+                    isDraggingSelf && "bg-blue-50 ring-1 ring-blue-200"
                 )}
+                onContextMenu={(event) => onMenu(event, levelIndex, node.path, [...ancestorPaths, node.path], 'cursor')}
             >
+                <button
+                    type="button"
+                    ref={isDraggable ? setActivatorNodeRef : undefined}
+                    className={clsx(
+                        "w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600",
+                        isDraggable ? "cursor-grab active:cursor-grabbing" : "cursor-default"
+                    )}
+                    {...(isDraggable ? listeners : {})}
+                    {...(isDraggable ? attributes : {})}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="Drag to reorder"
+                >
+                    <GripVertical className="w-3 h-3" />
+                </button>
                 <button
                     type="button"
                     onClick={() => {
@@ -835,31 +1019,32 @@ const ProfileTreeNode = ({
                     )}
                     <span className="truncate">{node.title}</span>
                 </button>
-                <button
-                    type="button"
-                    onClick={(event) => onMenu(event, levelIndex, node.path, [...ancestorPaths, node.path])}
-                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-slate-200 text-slate-400"
-                    aria-label="Open node menu"
-                >
-                    <MoreHorizontal className="w-3.5 h-3.5" />
-                </button>
             </div>
             {hasChildren && open && (
                 <div className="space-y-1 pl-3">
-                    {node.children!.map(child => (
-                        <ProfileTreeNode
-                            key={child.id}
-                            node={child}
-                            levelIndex={levelIndex + 1}
-                            ancestorPaths={[...ancestorPaths, node.path]}
-                            selectNode={selectNode}
-                            selectedNode={selectedNode}
-                            valueTree={valueTree}
-                            onMenu={onMenu}
-                        />
-                    ))}
+                    <SortableContext
+                        items={node.children!.map(child => getSortableId(child, valueTree))}
+                        strategy={verticalListSortingStrategy}
+                    >
+                        {node.children!.map(child => (
+                            <ProfileTreeNode
+                                key={child.id}
+                                node={child}
+                                levelIndex={levelIndex + 1}
+                                ancestorPaths={[...ancestorPaths, node.path]}
+                                selectNode={selectNode}
+                                selectedNode={selectedNode}
+                                valueTree={valueTree}
+                                onMenu={onMenu}
+                                structureView={structureView}
+                                getSortableId={getSortableId}
+                            />
+                        ))}
+                    </SortableContext>
                 </div>
             )}
         </div>
     );
+
+    return content;
 };
