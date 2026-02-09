@@ -21,6 +21,188 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+const SortableLevelItem = ({
+    level,
+    index,
+    compact,
+    onRemove,
+    onUpdate,
+    disableRemove,
+    showAdvancedOptions,
+    selectedPathText,
+    onOpenPathPicker,
+    selectedKeys,
+}: {
+    level: MappingProfile['levels'][number];
+    index: number;
+    compact: boolean;
+    onRemove: (levelIndex: number) => void;
+    onUpdate: (
+        levelIndex: number,
+        field: 'name' | 'path' | 'labelKey' | 'filterKey' | 'filterValues' | 'overridePaths' | 'role',
+        value: string
+    ) => void;
+    disableRemove: boolean;
+    showAdvancedOptions: boolean;
+    selectedPathText: string;
+    onOpenPathPicker: (mode: 'live' | 'draft', levelIndex: number) => void;
+    selectedKeys: string[];
+}) => {
+    const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: level.id });
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition
+    };
+
+    return (
+        <div
+            ref={setNodeRef}
+            style={style}
+            className={compact ? 'border border-slate-200 rounded-lg p-3 space-y-2 bg-white' : 'border border-slate-200 rounded-lg p-2 bg-white space-y-2'}
+        >
+            <div className="flex items-center justify-between">
+                <div className={compact ? 'text-xs font-semibold text-slate-500' : 'text-[11px] font-semibold text-slate-500'}>
+                    {`Level ${index + 1}`}
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="text-[10px] text-slate-400 hover:text-slate-600 cursor-grab"
+                        {...attributes}
+                        {...listeners}
+                    >
+                        Drag
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onRemove(index)}
+                        className="text-[10px] text-slate-400 hover:text-slate-600"
+                        disabled={disableRemove}
+                    >
+                        Remove
+                    </button>
+                </div>
+            </div>
+            <input
+                type="text"
+                value={level.name}
+                onChange={(e) => onUpdate(index, 'name', e.target.value)}
+                className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
+                placeholder="Level name"
+            />
+            <select
+                value={level.role ?? 'group'}
+                onChange={(e) => onUpdate(index, 'role', e.target.value)}
+                className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
+            >
+                <option value="tab">Tab (top level)</option>
+                <option value="group">Group</option>
+                <option value="field">Field (leaf)</option>
+            </select>
+            <input
+                type="text"
+                value={level.path}
+                onChange={(e) => onUpdate(index, 'path', e.target.value)}
+                className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
+                placeholder="Pick from auto-detect or use selected path"
+            />
+            <p className="text-[10px] text-slate-400">
+                Path = where the list lives in JSON. Example: <span className="font-mono">classes[*]</span>
+            </p>
+            <div className="flex flex-wrap gap-2">
+                <button
+                    type="button"
+                    onClick={() => selectedPathText && onUpdate(index, 'path', selectedPathText)}
+                    className="px-2 py-1 text-[10px] font-medium text-slate-600 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"
+                    disabled={!selectedPathText}
+                >
+                    Use selected path
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onOpenPathPicker(compact ? 'draft' : 'live', index)}
+                    className="px-2 py-1 text-[10px] font-medium text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-50"
+                >
+                    Pick from tree
+                </button>
+                {selectedKeys.length > 0 && (
+                    <select
+                        value=""
+                        onChange={(e) => onUpdate(index, 'labelKey', e.target.value)}
+                        className="input-field text-[10px]"
+                    >
+                        <option value="">Use label key...</option>
+                        {selectedKeys.map(key => (
+                            <option key={key} value={key}>{key}</option>
+                        ))}
+                    </select>
+                )}
+            </div>
+            {showAdvancedOptions && !compact && (
+                <>
+                    <input
+                        type="text"
+                        value={level.overridePaths?.join(', ') ?? ''}
+                        onChange={(e) => onUpdate(index, 'overridePaths', e.target.value)}
+                        className="input-field text-xs w-full"
+                        placeholder="Also include paths (comma separated)"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                        Also include items from other lists at different paths.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                        <input
+                            type="text"
+                            value={level.labelKey ?? ''}
+                            onChange={(e) => onUpdate(index, 'labelKey', e.target.value)}
+                            className="input-field text-xs w-full"
+                            placeholder="Label key (e.g., name)"
+                        />
+                        <input
+                            type="text"
+                            value={level.filterKey ?? ''}
+                            onChange={(e) => onUpdate(index, 'filterKey', e.target.value)}
+                            className="input-field text-xs w-full"
+                            placeholder="Filter key (e.g., type)"
+                        />
+                    </div>
+                    <input
+                        type="text"
+                        value={level.filterValues?.join(', ') ?? ''}
+                        onChange={(e) => onUpdate(index, 'filterValues', e.target.value)}
+                        className="input-field text-xs w-full"
+                        placeholder="Filter values (comma separated)"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                        Filters keep only items where <span className="font-mono">filterKey</span> matches one of the values.
+                    </p>
+                </>
+            )}
+            {showAdvancedOptions && compact && (
+                <>
+                    <input
+                        type="text"
+                        value={level.filterKey ?? ''}
+                        onChange={(e) => onUpdate(index, 'filterKey', e.target.value)}
+                        className="input-field text-sm w-full"
+                        placeholder="Filter key (e.g., type)"
+                    />
+                    <input
+                        type="text"
+                        value={level.filterValues?.join(', ') ?? ''}
+                        onChange={(e) => onUpdate(index, 'filterValues', e.target.value)}
+                        className="input-field text-sm w-full"
+                        placeholder="Filter values (comma separated)"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                        Example: filterKey <span className="font-mono">type</span>, values <span className="font-mono">STUDENT</span>
+                    </p>
+                </>
+            )}
+        </div>
+    );
+};
+
 export const ProfileManager = () => {
     const {
         profiles,
@@ -243,217 +425,6 @@ export const ProfileManager = () => {
         reorderDraftLevels(fromIndex, toIndex);
     };
 
-    const SortableLevelItem = ({
-        level,
-        index,
-        compact,
-        onRemove,
-        onUpdate,
-        disableRemove,
-        showAdvancedOptions
-    }: {
-        level: MappingProfile['levels'][number];
-        index: number;
-        compact: boolean;
-        onRemove: (levelIndex: number) => void;
-        onUpdate: (
-            levelIndex: number,
-            field: 'name' | 'path' | 'labelKey' | 'filterKey' | 'filterValues' | 'overridePaths' | 'role',
-            value: string
-        ) => void;
-        disableRemove: boolean;
-        showAdvancedOptions: boolean;
-    }) => {
-        const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: level.id });
-        const style = {
-            transform: CSS.Transform.toString(transform),
-            transition
-        };
-
-        return (
-            <div
-                ref={setNodeRef}
-                style={style}
-                className={compact ? 'border border-slate-200 rounded-lg p-3 space-y-2 bg-white' : 'border border-slate-200 rounded-lg p-2 bg-white space-y-2'}
-            >
-                <div className="flex items-center justify-between">
-                    <div className={compact ? 'text-xs font-semibold text-slate-500' : 'text-[11px] font-semibold text-slate-500'}>
-                        {`Level ${index + 1}`}
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            className="text-[10px] text-slate-400 hover:text-slate-600 cursor-grab"
-                            {...attributes}
-                            {...listeners}
-                        >
-                            Drag
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onRemove(index)}
-                            className="text-[10px] text-slate-400 hover:text-slate-600"
-                            disabled={disableRemove}
-                        >
-                            Remove
-                        </button>
-                    </div>
-                </div>
-                <input
-                    type="text"
-                    value={level.name}
-                    onChange={(e) => onUpdate(index, 'name', e.target.value)}
-                    className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
-                    placeholder="Level name"
-                />
-                <select
-                    value={level.role ?? 'group'}
-                    onChange={(e) => onUpdate(index, 'role', e.target.value)}
-                    className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
-                >
-                    <option value="tab">Tab (top level)</option>
-                    <option value="group">Group</option>
-                    <option value="field">Field (leaf)</option>
-                </select>
-                <input
-                    type="text"
-                    value={level.path}
-                    onChange={(e) => onUpdate(index, 'path', e.target.value)}
-                    className={compact ? 'input-field text-sm w-full' : 'input-field text-xs w-full'}
-                    placeholder="Pick from auto-detect or use selected path"
-                />
-                <p className="text-[10px] text-slate-400">
-                    Path = where the list lives in JSON. Example: <span className="font-mono">classes[*]</span>
-                </p>
-                <div className="flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        onClick={() => selectedPathText && onUpdate(index, 'path', selectedPathText)}
-                        className="px-2 py-1 text-[10px] font-medium text-slate-600 bg-slate-100 rounded hover:bg-slate-200 disabled:opacity-50"
-                        disabled={!selectedPathText}
-                    >
-                        Use selected path
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => openPathPicker(compact ? 'draft' : 'live', index)}
-                        className="px-2 py-1 text-[10px] font-medium text-slate-600 bg-white border border-slate-200 rounded hover:bg-slate-50"
-                    >
-                        Pick from tree
-                    </button>
-                    {selectedKeys.length > 0 && (
-                        <select
-                            value=""
-                            onChange={(e) => onUpdate(index, 'labelKey', e.target.value)}
-                            className="input-field text-[10px]"
-                        >
-                            <option value="">Use label key...</option>
-                            {selectedKeys.map(key => (
-                                <option key={key} value={key}>{key}</option>
-                            ))}
-                        </select>
-                    )}
-                </div>
-                {showAdvancedOptions && !compact && (
-                    <>
-                        <input
-                            type="text"
-                            value={level.overridePaths?.join(', ') ?? ''}
-                            onChange={(e) => onUpdate(index, 'overridePaths', e.target.value)}
-                            className="input-field text-xs w-full"
-                            placeholder="Also include paths (comma separated)"
-                        />
-                        <p className="text-[10px] text-slate-400">
-                            Also include items from other lists at different paths.
-                        </p>
-                        <div className="grid grid-cols-2 gap-2">
-                            <input
-                                type="text"
-                                value={level.labelKey ?? ''}
-                                onChange={(e) => onUpdate(index, 'labelKey', e.target.value)}
-                                className="input-field text-xs w-full"
-                                placeholder="Label key (e.g., name)"
-                            />
-                            <input
-                                type="text"
-                                value={level.filterKey ?? ''}
-                                onChange={(e) => onUpdate(index, 'filterKey', e.target.value)}
-                                className="input-field text-xs w-full"
-                                placeholder="Filter key (e.g., type)"
-                            />
-                        </div>
-                        <input
-                            type="text"
-                            value={level.filterValues?.join(', ') ?? ''}
-                            onChange={(e) => onUpdate(index, 'filterValues', e.target.value)}
-                            className="input-field text-xs w-full"
-                            placeholder="Filter values (comma separated)"
-                        />
-                        <p className="text-[10px] text-slate-400">
-                            Filters keep only items where <span className="font-mono">filterKey</span> matches one of the values.
-                        </p>
-                    </>
-                )}
-                {showAdvancedOptions && compact && (
-                    <>
-                        <input
-                            type="text"
-                            value={level.filterKey ?? ''}
-                            onChange={(e) => onUpdate(index, 'filterKey', e.target.value)}
-                            className="input-field text-sm w-full"
-                            placeholder="Filter key (e.g., type)"
-                        />
-                        <input
-                            type="text"
-                            value={level.filterValues?.join(', ') ?? ''}
-                            onChange={(e) => onUpdate(index, 'filterValues', e.target.value)}
-                            className="input-field text-sm w-full"
-                            placeholder="Filter values (comma separated)"
-                        />
-                        <p className="text-[10px] text-slate-400">
-                            Example: filterKey <span className="font-mono">type</span>, values <span className="font-mono">STUDENT</span>
-                        </p>
-                    </>
-                )}
-            </div>
-        );
-    };
-
-    const renderLevelEditorList = (
-        levels: MappingProfile['levels'],
-        compact: boolean,
-        onDragEndHandler: (event: DragEndEvent) => void,
-        onRemove: (index: number) => void,
-        onUpdate: (
-            levelIndex: number,
-            field: 'name' | 'path' | 'labelKey' | 'filterKey' | 'filterValues' | 'overridePaths' | 'role',
-            value: string
-        ) => void,
-        disableRemove: boolean,
-        showAdvancedOptions: boolean
-    ) => {
-        return (
-            <DndContext sensors={sensors} onDragEnd={onDragEndHandler}>
-                <SortableContext items={levels.map(level => level.id)} strategy={verticalListSortingStrategy}>
-                    <div className="space-y-2">
-                        {levels.map((level, index) => (
-                            <SortableLevelItem
-                                key={level.id}
-                                level={level}
-                                index={index}
-                                compact={compact}
-                                onRemove={onRemove}
-                                onUpdate={onUpdate}
-                                disableRemove={disableRemove}
-                                showAdvancedOptions={showAdvancedOptions}
-                            />
-                        ))}
-                    </div>
-                </SortableContext>
-            </DndContext>
-        );
-    };
-
     const selectedKeys = useMemo(() => {
         if (!selectedNode) return [];
         if (selectedNode.type === 'object') {
@@ -493,6 +464,49 @@ export const ProfileManager = () => {
         setPathPicker({ mode, levelIndex });
     };
 
+    const renderLevelEditorList = (
+        levels: MappingProfile['levels'],
+        compact: boolean,
+        onDragEndHandler: (event: DragEndEvent) => void,
+        onRemove: (index: number) => void,
+        onUpdate: (
+            levelIndex: number,
+            field: 'name' | 'path' | 'labelKey' | 'filterKey' | 'filterValues' | 'overridePaths' | 'role',
+            value: string
+        ) => void,
+        disableRemove: boolean,
+        showAdvancedOptions: boolean
+    ) => {
+        return (
+            <DndContext sensors={sensors} onDragEnd={onDragEndHandler}>
+                <SortableContext items={levels.map(level => level.id)} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-2">
+                        {levels.map((level, index) => (
+                            <SortableLevelItem
+                                key={level.id}
+                                level={level}
+                                index={index}
+                                compact={compact}
+                                onRemove={onRemove}
+                                onUpdate={onUpdate}
+                                disableRemove={disableRemove}
+                                showAdvancedOptions={showAdvancedOptions}
+                                selectedPathText={selectedPathText}
+                                onOpenPathPicker={openPathPicker}
+                                selectedKeys={selectedKeys}
+                            />
+                        ))}
+                    </div>
+                </SortableContext>
+            </DndContext>
+        );
+    };
+
+    // Removed duplicate logic since we moved it above
+
+
+
+
     const buildArrayPathFromSegments = (segments: typeof selectedPath) => {
         const base = pathSegmentsToWildcardPath(segments);
         if (!base) return '[*]';
@@ -527,9 +541,8 @@ export const ProfileManager = () => {
                     onClick={() => {
                         if (isArray) applyPickedPath(node.id);
                     }}
-                    className={`w-full flex items-center gap-2 text-left text-[12px] px-2 py-1 rounded ${
-                        isArray ? 'bg-white border border-slate-200 hover:bg-slate-50' : 'text-slate-500'
-                    }`}
+                    className={`w-full flex items-center gap-2 text-left text-[12px] px-2 py-1 rounded ${isArray ? 'bg-white border border-slate-200 hover:bg-slate-50' : 'text-slate-500'
+                        }`}
                     style={{ marginLeft: depth * 12 }}
                 >
                     <span className="text-[10px] text-slate-400 uppercase">{node.type}</span>
